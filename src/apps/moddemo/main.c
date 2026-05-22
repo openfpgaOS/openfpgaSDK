@@ -34,6 +34,14 @@
 #include <time.h>
 #include <unistd.h>
 
+static void mod_idle_wait(void) {
+#ifdef OF_PC
+    usleep(1000);
+#else
+    __asm__ volatile("wfi");
+#endif
+}
+
 /* ======================================================================
  * MOD format structures
  * ====================================================================== */
@@ -905,9 +913,9 @@ int main(void) {
     int mode = 0;  /* 0 = play, 1 = effect diag */
     int diag_idx = 0;
 
-    /* Main loop.  Sleep with wfi between timer ISRs so MIE stays on the
-     * whole time — usleep would ECALL into a kernel busy-wait with MIE
-     * cleared and silently drop most of the 1 kHz timer fires. */
+    /* Main loop.  On target, sleep with wfi between timer ISRs so MIE stays
+     * on; usleep would ECALL into a kernel busy-wait with MIE cleared and
+     * silently drop most of the 1 kHz timer fires. */
     int display_throttle = 0;
     for (;;) {
         if (mode == 0 && tick_pending) {
@@ -983,6 +991,6 @@ int main(void) {
             }
         }
 
-        __asm__ volatile("wfi");
+        mod_idle_wait();
     }
 }

@@ -25,7 +25,7 @@
 /* Cache parameters */
 #define DCACHE_LINE      64
 #define DCACHE_TOTAL     (64 * 1024)
-#define EVICT_BASE       0x13F00000
+#define EVICT_SPAN       (DCACHE_TOTAL * 2)
 
 /* Patterns */
 #define PAT_A  0xDEADBEEF
@@ -33,10 +33,26 @@
 #define PAT_C  0x12345678
 #define PAT_D  0xA5A5A5A5
 
+static uint8_t evict_area[EVICT_SPAN] __attribute__((aligned(DCACHE_LINE)));
+static uint8_t evict_seed;
+
+#ifdef OF_PC
+#define TEST_FENCE()    __asm__ volatile("" ::: "memory")
+#define TEST_FENCE_RW() __asm__ volatile("" ::: "memory")
+#else
+#define TEST_FENCE()    __asm__ volatile("fence" ::: "memory")
+#define TEST_FENCE_RW() __asm__ volatile("fence rw, rw" ::: "memory")
+#endif
+
 /* ================================================================
  * Raw cache instructions (Zicbom)
  * ================================================================ */
 
+#ifdef OF_PC
+static inline void cbo_clean(uintptr_t addr) { (void)addr; }
+static inline void cbo_inval(uintptr_t addr) { (void)addr; }
+static inline void cbo_flush(uintptr_t addr) { (void)addr; }
+#else
 /* cbo.clean: write back dirty line, keep valid */
 static inline void cbo_clean(uintptr_t addr) {
     __asm__ volatile(".insn i 0x0F, 2, x0, %0, 0x001" :: "r"(addr) : "memory");
@@ -51,13 +67,16 @@ static inline void cbo_inval(uintptr_t addr) {
 static inline void cbo_flush(uintptr_t addr) {
     __asm__ volatile(".insn i 0x0F, 2, x0, %0, 0x002" :: "r"(addr) : "memory");
 }
+#endif
 
-/* Force evict entire D-cache via conflict reads */
+/* Force evict entire D-cache via cacheable conflict writes */
 static void evict_dcache(void) {
-    volatile char *p = (volatile char *)EVICT_BASE;
-    for (uint32_t i = 0; i < DCACHE_TOTAL; i += DCACHE_LINE)
-        (void)p[i];
-    __asm__ volatile("fence" ::: "memory");
+    volatile uint8_t *p = evict_area;
+    uint8_t seed = evict_seed++;
+    TEST_FENCE_RW();
+    for (uint32_t i = 0; i < EVICT_SPAN; i += DCACHE_LINE)
+        p[i] = (uint8_t)(seed + i);
+    TEST_FENCE_RW();
 }
 
 /* ================================================================
@@ -100,10 +119,10 @@ void test_cache_primitives(void) {
 
         c_a[0] = PAT_A;  /* dirty in cache */
         c_b[0] = PAT_B;  /* dirty in cache */
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
 
         cbo_clean((uintptr_t)c_a);  /* clean ONLY line A */
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
 
         /* Read uncached: A should have PAT_A, B should still be 0 (old value) */
         uint32_t got_a = u_a[0];
@@ -115,9 +134,9 @@ void test_cache_primitives(void) {
      * After clean, cached read should still hit (return the value without re-reading). */
     {
         c_a[0] = PAT_C;
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
         cbo_clean((uintptr_t)c_a);
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
         /* The line should still be cached — read should be fast and correct */
         ASSERT("CP.02 cln keep", c_a[0] == PAT_C);
     }
@@ -129,9 +148,9 @@ void test_cache_primitives(void) {
         c_a[0] = PAT_A;
         of_cache_flush();    /* ensure PAT_A is in memory */
         c_a[0] = PAT_B;          /* dirty the line with a DIFFERENT value */
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
         cbo_inval((uintptr_t)c_a);  /* discard — PAT_B is lost */
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
         /* Next read re-fetches from memory: should get PAT_A (not PAT_B) */
         ASSERT("CP.03 inval", c_a[0] == PAT_A);
     }
@@ -141,9 +160,9 @@ void test_cache_primitives(void) {
      * then modify memory, read cached (should see memory value = was invalidated). */
     {
         c_a[0] = PAT_D;
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
         cbo_flush((uintptr_t)c_a);
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
 
         /* Clean part: uncached read should see PAT_D */
         uint32_t uc = u_a[0];
@@ -151,7 +170,7 @@ void test_cache_primitives(void) {
 
         /* Inval part: modify memory directly, cached read should pick it up */
         u_a[0] = PAT_C;
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
         ASSERT("CP.04b flush inv", c_a[0] == PAT_C);
     }
 
@@ -172,11 +191,11 @@ void test_cache_primitives(void) {
 
         /* Dirty all three lines */
         c0[0] = 0x11; c1[0] = 0x22; c2[0] = 0x33;
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
 
         /* Clean only the middle line */
         cbo_clean((uintptr_t)c1);
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
 
         ASSERT("CP.05 neighbor", u0[0] == 0 && u1[0] == 0x22 && u2[0] == 0);
     }
@@ -194,11 +213,11 @@ void test_cache_primitives(void) {
         /* Dirty both */
         cr_a[0] = PAT_A;
         cr_b[0] = PAT_B;
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
 
         /* Clean only A */
         cbo_clean((uintptr_t)cr_a);
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
 
         /* Evict everything to force re-read */
         evict_dcache();
@@ -224,7 +243,7 @@ void test_cache_primitives(void) {
     {
         volatile uint32_t *cr = (volatile uint32_t *)(CRAM1_UNCACHED + CRAM1_TEST_OFF + 8192);
         cr[0] = PAT_A;
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
         ASSERT("CP.07a pre", cr[0] == PAT_A);
         evict_dcache();
         ASSERT("CP.07b post", cr[0] == PAT_A);
@@ -235,7 +254,7 @@ void test_cache_primitives(void) {
         volatile uint32_t *cr = (volatile uint32_t *)(CRAM1_UNCACHED + CRAM1_TEST_OFF + 8192);
         for (int i = 0; i < 16; i++)
             cr[i] = (uint32_t)((uint32_t)i * 0x11111111u);
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
 
         int ok_pre = 1;
         for (int i = 0; i < 16; i++)
@@ -260,7 +279,7 @@ void test_cache_primitives(void) {
         volatile uint32_t *cr = (volatile uint32_t *)(CRAM1_UNCACHED + CRAM1_TEST_OFF + 8192);
         for (int i = 0; i < 256; i++)
             cr[i] = (uint32_t)(i ^ 0xBEEF0000);
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
         evict_dcache();
 
         int ok = 1;
@@ -279,7 +298,7 @@ void test_cache_primitives(void) {
         c[0] = PAT_A;
         of_cache_flush();              /* line is now clean in cache */
         cbo_clean((uintptr_t)c);            /* clean a clean line */
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
         ASSERT("CP.10 cln cln", u[0] == PAT_A && c[0] == PAT_A);
     }
 
@@ -291,7 +310,7 @@ void test_cache_primitives(void) {
         of_cache_flush();
         evict_dcache();                     /* line is NOT in cache */
         cbo_inval((uintptr_t)c);            /* inval a non-cached addr */
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
         ASSERT("CP.11 inv miss", u[0] == PAT_B);  /* memory unchanged */
     }
 
@@ -303,7 +322,7 @@ void test_cache_primitives(void) {
         c[0] = PAT_C;
         /* Pass address + 20 bytes (mid-line) to cbo.clean */
         cbo_clean((uintptr_t)c + 20);
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
         ASSERT("CP.12 unalign", u[0] == PAT_C);  /* whole line should be cleaned */
     }
 
@@ -313,7 +332,7 @@ void test_cache_primitives(void) {
         cr[0] = 0; of_cache_flush();
         cr[0] = PAT_D;
         cbo_flush((uintptr_t)cr);
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
         evict_dcache();
         ASSERT("CP.13 flush cr1", cr[0] == PAT_D);
     }
@@ -328,7 +347,7 @@ void test_cache_primitives(void) {
         of_cache_flush();  /* PAT_A → CRAM1 + evict from cache */
         cr[0] = PAT_B;         /* dirty the line again */
         cbo_inval((uintptr_t)cr);
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
         uint32_t got = cr[0];
         if (got == PAT_A) {
             test_pass("CP.14 inv cr1");   /* cbo.inval worked — discarded PAT_B */
@@ -358,7 +377,7 @@ void test_cache_primitives(void) {
         cbo_clean((uintptr_t)c1);
         cbo_clean((uintptr_t)c2);
         cbo_clean((uintptr_t)c3);
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
         ASSERT("CP.15 b2b cln",
                u0[0] == 0xAA && u1[0] == 0xBB &&
                u2[0] == 0xCC && u3[0] == 0xDD);
@@ -375,7 +394,7 @@ void test_cache_primitives(void) {
         for (int i = 0; i < 16; i++)
             c[i] = (uint32_t)(i + 1);
         cbo_clean((uintptr_t)c);
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
         int ok = 1;
         for (int i = 0; i < 16; i++)
             if (u[i] != (uint32_t)(i + 1)) { ok = 0; break; }
@@ -392,12 +411,12 @@ void test_cache_primitives(void) {
         volatile uint32_t *u = (volatile uint32_t *)(SDRAM_UNCACHED + SDRAM_TEST_OFF);
         c[0] = PAT_A;
         cbo_clean((uintptr_t)c);           /* PAT_A in cache (still valid) + memory */
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
         u[0] = PAT_B;                      /* modify memory behind cache's back */
         uint32_t stale = c[0];             /* should hit cache → PAT_A (stale) */
         ASSERT("CP.17a stale", stale == PAT_A);
         cbo_inval((uintptr_t)c);
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
         uint32_t fresh = c[0];             /* re-read from memory → PAT_B */
         ASSERT("CP.17b fresh", fresh == PAT_B);
     }
@@ -448,11 +467,11 @@ void test_cache_primitives(void) {
     {
         /* Stride = 256 sets * 64 bytes = 16384 bytes to hit same set */
         const uint32_t stride = DCACHE_LINE * 256;  /* 16384 */
-        volatile uint32_t *c0 = (volatile uint32_t *)(SDRAM_CACHED + SDRAM_TEST_OFF);
-        volatile uint32_t *c1 = (volatile uint32_t *)(SDRAM_CACHED + SDRAM_TEST_OFF + stride);
-        volatile uint32_t *c2 = (volatile uint32_t *)(SDRAM_CACHED + SDRAM_TEST_OFF + stride*2);
-        volatile uint32_t *c3 = (volatile uint32_t *)(SDRAM_CACHED + SDRAM_TEST_OFF + stride*3);
-        volatile uint32_t *c4 = (volatile uint32_t *)(SDRAM_CACHED + SDRAM_TEST_OFF + stride*4);
+        volatile uint32_t *c0 = (volatile uint32_t *)(uintptr_t)(SDRAM_CACHED + SDRAM_TEST_OFF);
+        volatile uint32_t *c1 = (volatile uint32_t *)(uintptr_t)(SDRAM_CACHED + SDRAM_TEST_OFF + stride);
+        volatile uint32_t *c2 = (volatile uint32_t *)(uintptr_t)(SDRAM_CACHED + SDRAM_TEST_OFF + stride*2);
+        volatile uint32_t *c3 = (volatile uint32_t *)(uintptr_t)(SDRAM_CACHED + SDRAM_TEST_OFF + stride*3);
+        volatile uint32_t *c4 = (volatile uint32_t *)(uintptr_t)(SDRAM_CACHED + SDRAM_TEST_OFF + stride*4);
         volatile uint32_t *u0 = (volatile uint32_t *)(SDRAM_UNCACHED + SDRAM_TEST_OFF);
         /* Prime and flush */
         c0[0] = 0; c1[0] = 0; c2[0] = 0; c3[0] = 0; c4[0] = 0;
@@ -461,7 +480,7 @@ void test_cache_primitives(void) {
         c0[0] = 0x10; c1[0] = 0x20; c2[0] = 0x30; c3[0] = 0x40;
         /* 5th write to same set — should evict way 0 (c0) */
         c4[0] = 0x50;
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
         /* c0 was evicted → should be in memory */
         ASSERT("CP.20 thrash", u0[0] == 0x10);
     }
@@ -509,7 +528,17 @@ void test_cache(void) {
     /* CS.05: conflict eviction */
     c[0] = PAT_B; c[16] = PAT_C;
     evict_dcache();
-    ASSERT("CS.05 evict", u[0] == PAT_B && u[16] == PAT_C);
+    {
+        uint32_t got0 = u[0];
+        uint32_t got16 = u[16];
+        if (got0 == PAT_B && got16 == PAT_C) {
+            test_pass("CS.05 evict");
+        } else {
+            snprintf(__buf, sizeof(__buf), "u0=%08lx u16=%08lx",
+                     (unsigned long)got0, (unsigned long)got16);
+            test_fail("CS.05 evict", __buf);
+        }
+    }
 
     /* CS.06: full flush via services table */
     {
@@ -562,11 +591,11 @@ void test_cache_cram0(void) {
     /* Uncached write/read — the only supported data-plane access to CRAM0. */
     volatile uint32_t *u = (volatile uint32_t *)(CRAM0_UNCACHED + CRAM0_TEST_OFF);
     u[0] = PAT_A;
-    __asm__ volatile("fence" ::: "memory");
+    TEST_FENCE();
     ASSERT("C0.uc wr", u[0] == PAT_A);
 
     for (uint32_t i = 0; i < 1024; i++) u[i] = i * 0x01010101;
-    __asm__ volatile("fence" ::: "memory");
+    TEST_FENCE();
     {
         int ok = 1;
         for (uint32_t i = 0; i < 1024; i++) if (u[i] != i * 0x01010101) { ok = 0; break; }
@@ -600,7 +629,7 @@ void test_cache_cram1(void) {
 
     /* C1.01: basic write-read (no flush) */
     u[0] = PAT_A;
-    __asm__ volatile("fence" ::: "memory");
+    TEST_FENCE();
     ASSERT("C1.01 uc wr", u[0] == PAT_A);
 
     /* C1.02: write + evict + readback (baseline) */
@@ -618,7 +647,7 @@ void test_cache_cram1(void) {
         for (uint32_t i = 0; i < 4096; i++) u[i] = i ^ PAT_D;
         volatile uint32_t *sdram = (volatile uint32_t *)(SDRAM_CACHED + SDRAM_TEST_OFF);
         for (uint32_t i = 0; i < DCACHE_TOTAL / 4; i++) sdram[i] = i;
-        __asm__ volatile("fence" ::: "memory");
+        TEST_FENCE();
 
         int ok = 1;
         uint32_t fi = 0, fe = 0, fg = 0;
@@ -758,7 +787,7 @@ void test_cache_cram1(void) {
             /* NO flush — just cache pressure */
             volatile uint32_t *sdram = (volatile uint32_t *)(SDRAM_CACHED + SDRAM_TEST_OFF);
             for (uint32_t i = 0; i < DCACHE_TOTAL / 4; i++) sdram[i] = i;
-            __asm__ volatile("fence" ::: "memory");
+            TEST_FENCE();
 
             volatile int16_t *v = (volatile int16_t *)pcm;
             int ok = 1;

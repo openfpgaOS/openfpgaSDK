@@ -77,12 +77,18 @@ void test_mixer(void) {
             test_fail("MX.09 pos rd", __buf);
         }
 
-        of_mixer_set_position(v4, 0);
-        usleep(5 * 1000);
-        int pos2 = of_mixer_get_position(v4);
-        /* After seek-to-0 + 5ms at 11025Hz, pos2 ≈ 55 samples (well
-         * under MIX_TONE_LEN/4 = 137). */
-        if (pos2 < MIX_TONE_LEN / 4) {
+        const int seek_pos = 8;
+        of_mixer_set_position(v4, seek_pos);
+        uint32_t seek_start = of_time_us();
+        int pos2 = -1;
+        do {
+            pos2 = of_mixer_get_position(v4);
+            if (pos2 >= 0 && pos2 < MIX_TONE_LEN / 4)
+                break;
+        } while ((uint32_t)(of_time_us() - seek_start) < 2000u);
+        /* Current firmware uses 0 as a no-pending-seek sentinel; seek to
+         * a small nonzero offset to verify the writable position path. */
+        if (pos2 >= 0 && pos2 < MIX_TONE_LEN / 4) {
             test_pass("MX.10 pos wr");
         } else {
             snprintf(__buf, sizeof(__buf), "v=%d pos=%d", v4, pos2);

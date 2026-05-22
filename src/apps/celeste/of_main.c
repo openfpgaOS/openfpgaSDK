@@ -32,6 +32,7 @@
 #include <string.h>
 
 #include "of_codec.h"
+#include "of_mixer.h"
 
 #include "celeste.h"
 #include "tilemap.h"
@@ -172,11 +173,36 @@ static Mix_Chunk *make_chunk_from_wav(const uint8_t *wav, uint32_t size) {
     if (result.bits_per_sample == 16) num_samples /= 2;
     if (result.channels == 2)         num_samples /= 2;
 
+#ifdef OF_PC
+    int16_t *pcm_s16 = (int16_t *)malloc(num_samples * sizeof(int16_t));
+    if (!pcm_s16) return NULL;
+
+    /* PC uses the real SDL_mixer path opened as signed 16-bit mono. */
+    if (result.bits_per_sample == 16) {
+        const int16_t *s = (const int16_t *)result.pcm;
+        int step = result.channels;
+        for (uint32_t i = 0; i < num_samples; i++)
+            pcm_s16[i] = s[i * step];
+    } else {
+        int step = result.channels;
+        for (uint32_t i = 0; i < num_samples; i++)
+            pcm_s16[i] = (int16_t)(((int)result.pcm[i * step] - 128) << 8);
+    }
+
+    Mix_Chunk *chunk = (Mix_Chunk *)calloc(1, sizeof(Mix_Chunk));
+    if (!chunk) {
+        free(pcm_s16);
+        return NULL;
+    }
+    chunk->allocated = 1;
+    chunk->abuf = (Uint8 *)pcm_s16;
+    chunk->alen = num_samples * sizeof(int16_t);
+    chunk->volume = MIX_MAX_VOLUME;
+#else
     int16_t *pcm_s16 = (int16_t *)of_mixer_alloc_samples(num_samples * sizeof(int16_t));
     if (!pcm_s16) return NULL;
 
-    /* PICO-8 SFX are 16-bit mono at 22050 Hz. Keep them as signed
-     * 16-bit in the SDRAM sample pool for the hardware mixer. */
+    /* Pocket SFX live in the SDRAM sample pool used by the hardware mixer. */
     if (result.bits_per_sample == 16) {
         const int16_t *s = (const int16_t *)result.pcm;
         int step = result.channels;
@@ -190,10 +216,11 @@ static Mix_Chunk *make_chunk_from_wav(const uint8_t *wav, uint32_t size) {
 
     Mix_Chunk *chunk = (Mix_Chunk *)calloc(1, sizeof(Mix_Chunk));
     if (!chunk) return NULL;
-    chunk->pcm_s16      = pcm_s16;
+    chunk->pcm_s16 = pcm_s16;
     chunk->sample_count = num_samples;
-    chunk->sample_rate  = result.sample_rate;
-    chunk->volume       = MIX_MAX_VOLUME;
+    chunk->sample_rate = result.sample_rate;
+    chunk->volume = MIX_MAX_VOLUME;
+#endif
     return chunk;
 }
 
