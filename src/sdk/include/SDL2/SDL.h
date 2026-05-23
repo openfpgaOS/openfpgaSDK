@@ -671,34 +671,9 @@ static inline void SDL_AudioPump(void) {
     }
 }
 
-static inline int16_t __sdl_read_s16le(const uint8_t *p) {
-    return (int16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
-}
-
-static inline void __sdl_write_s16le(uint8_t *p, int16_t v) {
-    uint16_t u = (uint16_t)v;
-    p[0] = (uint8_t)u;
-    p[1] = (uint8_t)(u >> 8);
-}
-
 static inline int SDL_QueueAudio(SDL_AudioDeviceID d, const void *data, uint32_t len) {
     (void)d;
-    uint32_t pairs = len / 4;
-    if (((uintptr_t)data & 1u) == 0) {
-        of_audio_write((const int16_t *)data, (int)pairs);
-        return 0;
-    }
-
-    const uint8_t *src = (const uint8_t *)data;
-    while (pairs > 0) {
-        int n = (pairs > 128) ? 128 : (int)pairs;
-        int16_t tmp[256];
-        for (int i = 0; i < n * 2; i++)
-            tmp[i] = __sdl_read_s16le(src + (i * 2));
-        of_audio_write(tmp, n);
-        src += (uint32_t)n * 4;
-        pairs -= (uint32_t)n;
-    }
+    of_audio_write((const int16_t *)data, (int)(len / 4));
     return 0;
 }
 
@@ -743,13 +718,13 @@ static inline void SDL_FreeWAV(uint8_t *buf) { free(buf); }
 static inline void SDL_MixAudioFormat(uint8_t *dst, const uint8_t *src,
                                        uint16_t fmt, uint32_t len, int vol) {
     (void)fmt;
-    for (uint32_t i = 0; i + 1 < len; i += 2) {
-        int16_t d = __sdl_read_s16le(dst + i);
-        int16_t s = __sdl_read_s16le(src + i);
-        int32_t m = (int32_t)d + (((int32_t)s * vol) >> 7);
+    const int16_t *s = (const int16_t *)src;
+    int16_t *d = (int16_t *)dst;
+    for (uint32_t i = 0; i < len/2; i++) {
+        int32_t m = (int32_t)d[i] + (((int32_t)s[i] * vol) >> 7);
         if (m > 32767) m = 32767;
         if (m < -32768) m = -32768;
-        __sdl_write_s16le(dst + i, (int16_t)m);
+        d[i] = (int16_t)m;
     }
 }
 #define SDL_MIX_MAXVOLUME 128

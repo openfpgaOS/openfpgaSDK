@@ -196,19 +196,19 @@ static void draw_frame(void)
     printf("Player 1");
     RESET;
 
-    GOTO(12, 2);
+    GOTO(13, 2);
     FG_YELLOW;
     BOLD;
     printf("Player 2");
     RESET;
 
-    GOTO(17, 2);
+    GOTO(18, 2);
     FG_YELLOW;
     BOLD;
     printf("Keyboard");
     RESET;
 
-    GOTO(21, 2);
+    GOTO(22, 2);
     FG_YELLOW;
     BOLD;
     printf("Mouse");
@@ -263,7 +263,7 @@ static void update_analogizer(const view_state_t *state)
            source_for_player(state, 0, p1_source, sizeof(p1_source)),
            source_for_player(state, 1, p2_source, sizeof(p2_source)));
 
-    clear_row(24);
+    clear_row(26);
     FG_GRAY;
     DIM;
     printf("Route: %-30.30s", assign);
@@ -272,7 +272,7 @@ static void update_analogizer(const view_state_t *state)
 
 static void print_buttons(uint32_t buttons)
 {
-    printf("UDLR:%c%c%c%c ABXY:%c%c%c%c LR:%c%c%c%c SS:%c%c",
+    printf("D:%c%c%c%c F:%c%c%c%c S:%c%c L:%c%c R:%c%c C:%c%c",
            bit(buttons, OF_BTN_UP, 'U'),
            bit(buttons, OF_BTN_DOWN, 'D'),
            bit(buttons, OF_BTN_LEFT, 'L'),
@@ -281,12 +281,14 @@ static void print_buttons(uint32_t buttons)
            bit(buttons, OF_BTN_B, 'B'),
            bit(buttons, OF_BTN_X, 'X'),
            bit(buttons, OF_BTN_Y, 'Y'),
-           bit(buttons, OF_BTN_L1, '1'),
-           bit(buttons, OF_BTN_R1, '1'),
-           bit(buttons, OF_BTN_L2, '2'),
-           bit(buttons, OF_BTN_R2, '2'),
            bit(buttons, OF_BTN_SELECT, 'S'),
-           bit(buttons, OF_BTN_START, 'T'));
+           bit(buttons, OF_BTN_START, 'T'),
+           bit(buttons, OF_BTN_L1, '1'),
+           bit(buttons, OF_BTN_L2, '2'),
+           bit(buttons, OF_BTN_R1, '1'),
+           bit(buttons, OF_BTN_R2, '2'),
+           bit(buttons, OF_BTN_L3, 'L'),
+           bit(buttons, OF_BTN_R3, 'R'));
 }
 
 static void update_player(int row, const char *label, int player,
@@ -305,13 +307,12 @@ static void update_player(int row, const char *label, int player,
     print_buttons(pad->buttons);
 
     clear_row(row + 2);
-    printf("L:%6d,%6d R:%6d,%6d",
-           pad->joy_lx, pad->joy_ly, pad->joy_rx, pad->joy_ry);
+    printf("LS x:%6d y:%6d LT:%5u",
+           pad->joy_lx, pad->joy_ly, (unsigned)pad->trigger_l);
 
     clear_row(row + 3);
-    printf("Trig L:%5u R:%5u  raw:%04lx",
-           (unsigned)pad->trigger_l, (unsigned)pad->trigger_r,
-           (unsigned long)pad->buttons);
+    printf("RS x:%6d y:%6d RT:%5u",
+           pad->joy_rx, pad->joy_ry, (unsigned)pad->trigger_r);
 }
 
 static void update_keyboard(const view_state_t *state)
@@ -321,19 +322,19 @@ static void update_keyboard(const view_state_t *state)
 
     format_usage_list(k->keys_pressed, pressed, sizeof(pressed));
 
-    clear_row(18);
+    clear_row(19);
     FG_GREEN;
     printf("Present:%-3s", k->present ? "yes" : "no");
     RESET;
     printf(" mod:%04x p:%04x",
            (unsigned)k->modifiers, (unsigned)k->modifiers_pressed);
 
-    clear_row(19);
+    clear_row(20);
     printf("Down:%02x %02x %02x %02x %02x %02x",
            k->report_keys[0], k->report_keys[1], k->report_keys[2],
            k->report_keys[3], k->report_keys[4], k->report_keys[5]);
 
-    clear_row(20);
+    clear_row(21);
     printf("Pressed:%-28.28s", pressed);
 }
 
@@ -342,14 +343,14 @@ static void update_mouse(const view_state_t *state)
     char btns[7];
     const of_mouse_state_t *m = &state->mouse;
 
-    clear_row(22);
+    clear_row(23);
     FG_GREEN;
     printf("Present:%-3s", m->present ? "yes" : "no");
     RESET;
     printf(" btn:%s dx:%-5ld dy:%-5ld",
            mouse_buttons(m->buttons, btns), (long)m->dx, (long)m->dy);
 
-    clear_row(23);
+    clear_row(24);
     printf("Pressed:%04x Released:%04x Ctr:%5u",
            (unsigned)m->buttons_pressed, (unsigned)m->buttons_released,
            (unsigned)m->report_counter);
@@ -367,7 +368,7 @@ int main(void)
         read_state(&state);
         update_analogizer(&state);
         update_player(9, "P1", 0, &state.p1, &state);
-        update_player(13, "P2", 1, &state.p2, &state);
+        update_player(14, "P2", 1, &state.p2, &state);
         update_keyboard(&state);
         update_mouse(&state);
         usleep(16000);
