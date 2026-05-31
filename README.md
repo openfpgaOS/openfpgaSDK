@@ -175,6 +175,54 @@ make test
 
 ---
 
+## Porting SDL2 Games
+
+The SDK ships an **SDL2 compatibility layer** so existing 2D SDL games
+(DevilutionX, ECWolf, Doom, ScummVM, …) port with little or no source
+change. Just `#include <SDL2/SDL.h>` (and `<SDL2/SDL_mixer.h>` for audio) —
+there is no extra Makefile wiring: `sdk.mk` auto-links the implementation
+(`src/sdk/of_sdl2.c`) into every app, and `--gc-sections` removes it from
+apps that don't call any `SDL_*` function, so non-SDL apps pay nothing.
+
+See **`src/apps/sdldemo/`** for a complete, minimal template (8-bit surface
++ palette, colorkey blit, callback audio, input) that builds for both the
+Pocket (`make`) and the desktop (`make test`).
+
+**What's implemented** (over the `of_*` HAL, CPU/surface based — no GPU dep):
+
+- **Video** — 8-bit indexed window surface, palette (`SDL_SetPaletteColors`),
+  full `SDL_Surface` create/convert/blit (colorkey + clip + scale), software
+  `SDL_Renderer`/`SDL_Texture`, and SDL 1.2 `SDL_SetVideoMode`/`SDL_Flip`.
+  When the window size matches the active video mode the surface aliases the
+  OS triple-buffer (zero-copy present); otherwise present nearest-neighbor
+  scales into the framebuffer.
+- **Input** — the Analogue Pocket gamepad is exposed three ways at once:
+  `SDL_PollEvent` emits **both** `SDL_CONTROLLERBUTTON*`/axis events **and**
+  keyboard `SDL_KEYDOWN`/`SDL_KEYUP` events, and `SDL_GetKeyboardState()`
+  returns a live keystate. Game-controller and joystick query APIs work too.
+- **Audio** — `SDL_AudioCallback` is **auto-pumped** from `SDL_PollEvent` /
+  `SDL_Delay` / `SDL_RenderPresent` / `SDL_Flip` (no audio thread needed);
+  `SDL_QueueAudio`, `SDL_LoadWAV`, and `SDL_mixer` (SFX via `of_mixer`, MIDI
+  music via `of_midi`) are supported.
+- **Misc** — `SDL_RWops` (file + memory), timers, threads (run cooperatively),
+  mutex/cond/sem (no-ops on the single core), hints, message boxes.
+
+**Tuning knobs** (compile-time `-D…`):
+
+| Define | Effect |
+|---|---|
+| `OF_SDL_NO_KEYBOARD_EVENTS` | Suppress the keyboard event stream (controller-only games) |
+| `OF_SDL_NO_CONTROLLER_EVENTS` | Suppress the controller event stream (keyboard-only games) |
+
+A game that uses **SDL_mixer music** (`Mix_PlayMusic`) also appends
+`$(OF_MIDI_SRC)` to `SRCS` (that path pulls in the MIDI engine). The button →
+SDL scancode map lives in `of_to_scancode()` in `src/sdk/of_sdl2.c`; tweak it
+there for a specific game's controls. Truecolor (RGB) rendering is approximated
+to the 8-bit screen palette — the layer is indexed-color first, like the games
+it targets.
+
+---
+
 ## API Reference
 
 Include `"of.h"` for the entire API, or include individual headers.
