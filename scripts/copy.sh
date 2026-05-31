@@ -13,7 +13,6 @@
 set -e
 
 GREEN='\033[92m'
-RED='\033[91m'
 RESET='\033[0m'
 
 SDK_DIR="$(cd "$(dirname "$0")/.." && pwd)"

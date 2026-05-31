@@ -948,7 +948,7 @@ md13_done:;
  *
  * Tests the sample-based MIDI backend: bank loading, zone lookup,
  * mixer voice allocation, and audible playback via hardware mixer.
- * Requires bank.ofsf in data slot 4.
+ * Requires bank.ofsf in data slot 7 (the reserved Sound Bank slot).
  * ================================================================ */
 
 void test_midi_smp(void) {

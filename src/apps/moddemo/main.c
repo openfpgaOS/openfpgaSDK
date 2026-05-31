@@ -19,11 +19,11 @@
  * HW mixer's job.  This is what makes a MOD demo cheap on Pocket.
  *
  * Slot map (per instance.json):
- *   slot:3  primary MOD file
- *   slot:4  alternate MOD file (A button switches)
+ *   slot:4  primary MOD file
+ *   slot:5  alternate MOD file (A button switches)
  *
  * Controls:
- *   A   switch between slot:3 and slot:4
+ *   A   switch between slot:4 and slot:5
  *   B   skip to next pattern in the song
  */
 
@@ -818,8 +818,8 @@ int main(void) {
     /* Initialize mixer */
     of_mixer_init(32, OF_MIXER_OUTPUT_RATE);
 
-    /* Load MOD files from slots 3 and 4 */
-    static const char *slot_names[] = { "slot:3", "slot:4" };
+    /* Load MOD files from slots 4 and 5 */
+    static const char *slot_names[] = { "slot:4", "slot:5" };
     static uint8_t *file_bufs[MAX_SONGS];
     (void)file_bufs;  /* kept alive so pattern_data pointers remain valid */
 
@@ -849,7 +849,7 @@ int main(void) {
     }
 
     if (num_songs == 0) {
-        printf("No valid MOD files found in slots 3-4.\n");
+        printf("No valid MOD files found in slots 4-5.\n");
         for (;;) usleep(100000);
     }
 

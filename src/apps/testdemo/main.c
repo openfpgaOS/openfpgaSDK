@@ -39,7 +39,6 @@ static int fail_log_count;
 /* ================================================================
  * Two-column layout state
  * ================================================================ */
-#define COL_W   19      /* characters per column */
 #define COL1_X  1       /* left column x (0-based) */
 #define COL2_X  21      /* right column x */
 #define ROW_TOP 4       /* first data row */
@@ -225,7 +224,6 @@ static const test_fn tests[] = {
     test_mixer_adv,
     test_mixer_stress,
     // --- bisecting 3rd-pass hang ---
-    // test_opl3,
     // test_midi,
     // test_midi_smp,
     test_net,

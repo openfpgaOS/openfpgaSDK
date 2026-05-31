@@ -71,7 +71,7 @@ int main(void) {
 
 ### Standard C library
 
-The OS kernel provides a full C standard library via a jump table. No musl or newlib needed in your build:
+Apps statically link a full C standard library (upstream musl). Include the standard headers:
 
 ```c
 #include <stdio.h>    // printf, snprintf, sscanf,
@@ -96,7 +96,7 @@ What works:
 - Templates
 - Static constructors and destructors (`.init_array` / `.fini_array`)
 - All SDK headers are `extern "C"` compatible
-- `<iostream>` — `std::cout`, `std::cerr`, `std::cin` (lightweight, jump-table backed)
+- `<iostream>` — `std::cout`, `std::cerr`, `std::cin` (lightweight)
 
 What is **not** available (freestanding environment):
 - Exceptions (`-fno-exceptions`)
@@ -119,7 +119,7 @@ int main(void) {
 }
 ```
 
-`std::cout` and `std::cerr` write through `write(1, …)` / `write(2, …)` via the OS jump table — identical to calling `printf`. `std::cin` reads from fd 0 character-by-character; on the Analogue Pocket there is no keyboard, so `cin` is mainly useful when stdin is connected to a serial port or redirected by the host OS.
+`std::cout` and `std::cerr` write through `write(1, …)` / `write(2, …)` syscalls — identical to calling `printf`. `std::cin` reads from fd 0 character-by-character; on the Analogue Pocket there is no keyboard, so `cin` is mainly useful when stdin is connected to a serial port or redirected by the host OS.
 
 Supported `operator<<` types: `bool`, `char`, `unsigned char`, `const char*`, `short`, `unsigned short`, `int`, `unsigned int`, `long`, `unsigned long`, `long long`, `unsigned long long`, `float`, `double`, `void*`.
 
@@ -668,8 +668,7 @@ make                                # rebuild your app
 0x00000000 ┌──────────────────────┐
            │ BRAM (32 KB)         │
            │ 0x0000-0x1FFF: OS    │  Boot, trap handler
-           │ 0x2000-0x7BFF: App   │  OF_FASTTEXT (~23 KB)
-           │ 0x7C00-0x7DFF: libc  │  Jump table (BRAM, no D-cache)
+           │ 0x2000-0x7DFF: App   │  OF_FASTTEXT (~24 KB)
            │ 0x7E00-0x7FFF: Stack │  Trap frame
 0x00008000 ├──────────────────────┤
            │                      │
@@ -787,8 +786,8 @@ Users extract the ZIP to their SD card root.
 
 For larger ports (Duke Nukem, Doom, etc.) that carry their own build system:
 
-1. Copy `src/sdk/include/` and `src/sdk/libc/` into your repo as `sdk/`
-2. Copy `src/sdk/crt/start.S` and `src/sdk/crt/app.ld`
+1. Copy `src/sdk/include/`, `src/sdk/musl/`, and `src/sdk/sdk.mk` into your repo as `sdk/`
+2. Copy `src/sdk/app.ld`
 3. Write a `posix_shim.c` with app-specific stubs
 4. Use `sdk/of_posix.c` for POSIX I/O (`open`/`read`/`write`/`lseek`)
 5. Register data files: `of_file_slot_register(3, "game.grp")`
@@ -823,10 +822,9 @@ openfgpaSDK/
 │   │   ├── testdemo/     <- Kernel test suite (182 assertions)
 │   │   ├── triplebuf/    <- Triple-buffer framebuffer demo
 │   │   └── wavdemo/      <- WAV audio playback
-│   └── sdk/              <- Headers, libc, CRT, build rules (SDK-owned)
+│   └── sdk/              <- Headers, musl libc, build rules (SDK-owned)
 │       ├── include/      <- openfpgaOS API headers
-│       ├── libc/         <- C standard library wrappers
-│       ├── crt/          <- Startup code + linker script
+│       ├── musl/         <- bundled musl C library + linker script
 │       ├── platforms/    <- Platform templates & copy scripts
 │       │   └── pocket/   <- Analogue Pocket target
 │       └── pc/           <- SDL2 shim for desktop builds

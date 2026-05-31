@@ -13,13 +13,10 @@
 /* Memory map */
 #define SDRAM_CACHED     0x10000000
 #define SDRAM_UNCACHED   0x50000000
-#define CRAM0_CACHED     0x30000000
-#define CRAM0_UNCACHED   0x38000000
 #define CRAM1_UNCACHED   0x39000000
 
 /* Test offsets — avoid colliding with app code/data */
 #define SDRAM_TEST_OFF   0x03E00000  /* 62 MB into SDRAM */
-#define CRAM0_TEST_OFF   0x00800000  /* 8 MB into CRAM0 */
 #define CRAM1_TEST_OFF   0x00400000  /* legacy CRAM1 probe offset */
 
 /* Cache parameters */
@@ -585,25 +582,6 @@ void test_cache_cram0(void) {
     test_pass("skipped (v2)");
     section_end();
     return;
-#if 0
-    if (!cache_tests_supported()) { test_pass("not pocket"); section_end(); return; }
-
-    /* Uncached write/read — the only supported data-plane access to CRAM0. */
-    volatile uint32_t *u = (volatile uint32_t *)(CRAM0_UNCACHED + CRAM0_TEST_OFF);
-    u[0] = PAT_A;
-    TEST_FENCE();
-    ASSERT("C0.uc wr", u[0] == PAT_A);
-
-    for (uint32_t i = 0; i < 1024; i++) u[i] = i * 0x01010101;
-    TEST_FENCE();
-    {
-        int ok = 1;
-        for (uint32_t i = 0; i < 1024; i++) if (u[i] != i * 0x01010101) { ok = 0; break; }
-        ASSERT("C0.uc 4K", ok);
-    }
-
-    section_end();
-#endif /* pre-v2 reference code */
 }
 
 /* ================================================================
@@ -622,185 +600,4 @@ void test_cache_cram1(void) {
     test_pass("skipped (v2)");
     section_end();
     return;
-#if 0
-    if (!cache_tests_supported()) { test_pass("not pocket"); section_end(); return; }
-
-    volatile uint32_t *u = (volatile uint32_t *)(CRAM1_UNCACHED + CRAM1_TEST_OFF);
-
-    /* C1.01: basic write-read (no flush) */
-    u[0] = PAT_A;
-    TEST_FENCE();
-    ASSERT("C1.01 uc wr", u[0] == PAT_A);
-
-    /* C1.02: write + evict + readback (baseline) */
-    {
-        for (int i = 0; i < 256; i++) u[i] = (uint32_t)(i ^ 0xFF);
-        evict_dcache();
-        int ok = 1;
-        for (int i = 0; i < 256; i++) if (u[i] != (uint32_t)(i ^ 0xFF)) { ok = 0; break; }
-        ASSERT("C1.02 evict", ok);
-    }
-
-    /* C1.03: write via 0x39, NO flush, pressure D-cache, readback.
-     * Tests whether 0x39 writes survive cache eviction. */
-    {
-        for (uint32_t i = 0; i < 4096; i++) u[i] = i ^ PAT_D;
-        volatile uint32_t *sdram = (volatile uint32_t *)(SDRAM_CACHED + SDRAM_TEST_OFF);
-        for (uint32_t i = 0; i < DCACHE_TOTAL / 4; i++) sdram[i] = i;
-        TEST_FENCE();
-
-        int ok = 1;
-        uint32_t fi = 0, fe = 0, fg = 0;
-        for (uint32_t i = 0; i < 4096; i++) {
-            uint32_t exp = i ^ PAT_D;
-            uint32_t got = u[i];
-            if (got != exp) { ok = 0; fi = i; fe = exp; fg = got; break; }
-        }
-        if (ok) test_pass("C1.03 pressure");
-        else { snprintf(__buf, sizeof(__buf), "@%lu x%08lx!=%08lx", (unsigned long)fi, (unsigned long)fe, (unsigned long)fg); test_fail("C1.03 pressure", __buf); }
-    }
-
-    /* C1.04: cbo.clean on 0x39 alias — does it find the lines? */
-    u[0] = PAT_B; u[1] = PAT_C;
-    of_cache_clean_range((void *)(CRAM1_UNCACHED + CRAM1_TEST_OFF), 8);
-    evict_dcache();
-    ASSERT("C1.04 cln w", u[0] == PAT_B && u[1] == PAT_C);
-
-    /* C1.05: cbo.clean 4KB on 0x39 */
-    {
-        for (uint32_t i = 0; i < 1024; i++) u[i] = ~i;
-        of_cache_clean_range((void *)(CRAM1_UNCACHED + CRAM1_TEST_OFF), 4096);
-        evict_dcache();
-        int ok = 1;
-        for (uint32_t i = 0; i < 1024; i++) if (u[i] != ~i) { ok = 0; break; }
-        ASSERT("C1.05 cln 4K", ok);
-    }
-
-    /* C1.06: full flush then readback */
-    {
-        for (uint32_t i = 0; i < 1024; i++) u[i] = i * 3;
-        of_cache_flush();
-        int ok = 1;
-        for (uint32_t i = 0; i < 1024; i++) if (u[i] != i * 3) { ok = 0; break; }
-        ASSERT("C1.06 flush", ok);
-    }
-
-    /* C1.07: byte write + flush */
-    {
-        volatile uint8_t *ub = (volatile uint8_t *)(CRAM1_UNCACHED + CRAM1_TEST_OFF);
-        u[0] = 0;
-        of_cache_flush();
-        ub[0] = 0xAB;
-        of_cache_flush();
-        ASSERT("C1.07 byte", (u[0] & 0xFF) == 0xAB);
-    }
-
-    /* C1.08: cbo.inval on 0x39 — can we invalidate cached 0x39 lines? */
-    {
-        u[0] = PAT_A;
-        of_cache_flush();
-        /* Now write directly and invalidate */
-        u[0] = PAT_B;
-        of_cache_inval_range((void *)(CRAM1_UNCACHED + CRAM1_TEST_OFF), 4);
-        /* Read should get PAT_B if inval worked (re-reads from CRAM1) */
-        ASSERT("C1.08 inval", u[0] == PAT_B);
-    }
-
-    /* C1.09: mixer alloc scenario — small (2K samples = 4KB) */
-    {
-        of_mixer_init(4, 48000);
-        of_mixer_free_samples();
-        uint32_t sc = 2048;
-        int16_t *pcm = (int16_t *)of_mixer_alloc_samples(sc * 2);
-        ASSERT("C1.09a alloc", pcm != NULL);
-        if (pcm) {
-            for (uint32_t i = 0; i < sc; i++) pcm[i] = (int16_t)(i * 7 - 8000);
-            of_cache_flush();
-            of_cache_inval_range(pcm, sc * 2);
-            volatile int16_t *v = (volatile int16_t *)pcm;
-            int ok = 1;
-            uint32_t fi = 0;
-            for (uint32_t i = 0; i < sc; i++) {
-                if (v[i] != (int16_t)(i * 7 - 8000)) { ok = 0; fi = i; break; }
-            }
-            if (ok) test_pass("C1.09b mx 4K");
-            else { snprintf(__buf, sizeof(__buf), "fail @%lu", (unsigned long)fi); test_fail("C1.09b mx 4K", __buf); }
-        }
-        of_mixer_free_samples();
-    }
-
-    /* C1.10: mixer alloc scenario — large (16K samples = 32KB) */
-    {
-        of_mixer_init(4, 48000);
-        of_mixer_free_samples();
-        uint32_t sc = 16384;
-        int16_t *pcm = (int16_t *)of_mixer_alloc_samples(sc * 2);
-        ASSERT("C1.10a alloc", pcm != NULL);
-        if (pcm) {
-            for (uint32_t i = 0; i < sc; i++) pcm[i] = (int16_t)(i ^ 0x5555);
-            of_cache_flush();
-            of_cache_inval_range(pcm, sc * 2);
-            volatile int16_t *v = (volatile int16_t *)pcm;
-            int ok = 1;
-            uint32_t fi = 0;
-            for (uint32_t i = 0; i < sc; i++) {
-                if (v[i] != (int16_t)(i ^ 0x5555)) { ok = 0; fi = i; break; }
-            }
-            if (ok) test_pass("C1.10b mx 32K");
-            else { snprintf(__buf, sizeof(__buf), "fail @%lu", (unsigned long)fi); test_fail("C1.10b mx 32K", __buf); }
-        }
-        of_mixer_free_samples();
-    }
-
-    /* C1.11: write + clean_range only (no full flush) — does range clean work on 0x39? */
-    {
-        of_mixer_init(4, 48000);
-        of_mixer_free_samples();
-        uint32_t sc = 2048;
-        int16_t *pcm = (int16_t *)of_mixer_alloc_samples(sc * 2);
-        if (pcm) {
-            for (uint32_t i = 0; i < sc; i++) pcm[i] = (int16_t)(i * 11);
-            /* ONLY range clean, no full flush */
-            of_cache_clean_range(pcm, sc * 2);
-            evict_dcache();  /* force re-read */
-            volatile int16_t *v = (volatile int16_t *)pcm;
-            int ok = 1;
-            uint32_t fi = 0;
-            for (uint32_t i = 0; i < sc; i++) {
-                if (v[i] != (int16_t)(i * 11)) { ok = 0; fi = i; break; }
-            }
-            if (ok) test_pass("C1.11 cln only");
-            else { snprintf(__buf, sizeof(__buf), "fail @%lu", (unsigned long)fi); test_fail("C1.11 cln only", __buf); }
-        }
-        of_mixer_free_samples();
-    }
-
-    /* C1.12: write pattern, NO flush at all, heavy cache pressure, readback.
-     * If 0x39 is truly uncached this passes. If cached, this likely fails. */
-    {
-        of_mixer_init(4, 48000);
-        of_mixer_free_samples();
-        uint32_t sc = 4096;
-        int16_t *pcm = (int16_t *)of_mixer_alloc_samples(sc * 2);
-        if (pcm) {
-            for (uint32_t i = 0; i < sc; i++) pcm[i] = (int16_t)(i * 13);
-            /* NO flush — just cache pressure */
-            volatile uint32_t *sdram = (volatile uint32_t *)(SDRAM_CACHED + SDRAM_TEST_OFF);
-            for (uint32_t i = 0; i < DCACHE_TOTAL / 4; i++) sdram[i] = i;
-            TEST_FENCE();
-
-            volatile int16_t *v = (volatile int16_t *)pcm;
-            int ok = 1;
-            uint32_t fi = 0;
-            for (uint32_t i = 0; i < sc; i++) {
-                if (v[i] != (int16_t)(i * 13)) { ok = 0; fi = i; break; }
-            }
-            if (ok) test_pass("C1.12 no flush");
-            else { snprintf(__buf, sizeof(__buf), "fail @%lu", (unsigned long)fi); test_fail("C1.12 no flush", __buf); }
-        }
-        of_mixer_free_samples();
-    }
-
-    section_end();
-#endif /* pre-v2 reference code */
 }

@@ -487,8 +487,6 @@ void test_mixer_stress(void) {
     section_end();
 }
 
-void test_opl3(void) { }
-
 void test_audio_stream(void) {
     section_start("Audio Strm");
 
