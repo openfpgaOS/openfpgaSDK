@@ -1,3 +1,9 @@
+//------------------------------------------------------------------------------
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileType: SOURCE
+// SPDX-FileCopyrightText: (c) 2026, ThinkElastic <Think@Elastic.com>
+//------------------------------------------------------------------------------
+
 /*
  * sdldemo -- reference/template app for the openfpgaOS SDL2 compatibility
  * layer (<SDL2/SDL.h>, implemented in src/sdk/of_sdl2.c).
