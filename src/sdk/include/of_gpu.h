@@ -1134,7 +1134,72 @@ static inline void of_gpu_submit_command_stream_batch(const uint32_t *words,
     _gpu_flush_cmd_stream();
 }
 
-#endif /* !OF_PC */
+#else /* OF_PC — desktop has no HW GPU; provide no-op stubs so apps that
+       *         exercise the GPU API still link in the SDL2 test build. */
+
+typedef struct {
+    uint32_t status, rdptr, wrptr, fence_reached;
+    uint32_t dma_waits, dma_spin_iters;
+    uint32_t ring_waits, ring_spin_iters;
+    uint32_t min_ring_free, ring_free;
+} of_gpu_debug_snapshot_t;
+
+static inline void     of_gpu_init(void)                                  {}
+static inline void     of_gpu_shutdown(void)                              {}
+static inline void     of_gpu_kick(void)                                  {}
+static inline uint32_t of_gpu_fence(void)                                 { return 0; }
+static inline uint32_t of_gpu_submit(void)                                { return 0; }
+static inline int      of_gpu_fence_reached(uint32_t t)                   { (void)t; return 1; }
+static inline void     of_gpu_wait(uint32_t t)                            { (void)t; }
+static inline void     of_gpu_finish(void)                                {}
+static inline void     of_gpu_prepare_framebuffer_for_cpu(void)           {}
+static inline uint32_t of_gpu_flip_to(int idx)                            { (void)idx; return 0; }
+
+static inline void of_gpu_palookup_upload(uint8_t slot, const uint8_t *data,
+                                          uint32_t size) {
+    (void)slot; (void)data; (void)size;
+}
+static inline void of_gpu_translucency_upload(const uint8_t *table, uint32_t size) {
+    (void)table; (void)size;
+}
+static inline void of_gpu_set_framebuffer(uint32_t addr, uint16_t stride) {
+    (void)addr; (void)stride;
+}
+static inline void of_gpu_bind_texture(const of_gpu_texture_t *tex)       { (void)tex; }
+static inline void of_gpu_clear(uint32_t flags, uint16_t color)           { (void)flags; (void)color; }
+static inline void of_gpu_clear_rect(uint32_t addr, uint16_t w, uint16_t h,
+                                     uint8_t color) {
+    (void)addr; (void)w; (void)h; (void)color;
+}
+static inline void of_gpu_clear_rect_strided(uint32_t addr, uint16_t w,
+                                             uint16_t h, uint16_t stride,
+                                             uint8_t color) {
+    (void)addr; (void)w; (void)h; (void)stride; (void)color;
+}
+static inline void of_gpu_draw_affine_span_group(const of_gpu_affine_span_group_t *g) {
+    (void)g;
+}
+static inline void of_gpu_draw_persp_span_group(const of_gpu_persp_span_group_t *g) {
+    (void)g;
+}
+static inline void of_gpu_draw_persp_span_group_batch(const of_gpu_persp_span_group_t *spans,
+                                                      int count) {
+    (void)spans; (void)count;
+}
+static inline void of_gpu_submit_command_stream_batch(const uint32_t *words, int count) {
+    (void)words; (void)count;
+}
+static inline void of_gpu_debug_snapshot(of_gpu_debug_snapshot_t *snap, int reset) {
+    (void)reset;
+    if (snap) {
+        snap->status = snap->rdptr = snap->wrptr = snap->fence_reached = 0;
+        snap->dma_waits = snap->dma_spin_iters = 0;
+        snap->ring_waits = snap->ring_spin_iters = 0;
+        snap->min_ring_free = snap->ring_free = 0;
+    }
+}
+
+#endif /* OF_PC */
 
 #ifdef __cplusplus
 }
