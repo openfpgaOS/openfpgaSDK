@@ -17,8 +17,6 @@
  *     the HW mixer's AXI master sees committed bytes)
  *   - Per-voice rate updates with of_mixer_set_rate_raw (Q16.16) on
  *     the tracker's tick boundary — no per-sample CPU mixing
- *   - Reserved of_mixer_set_filter calls for the Amiga-A500 low-pass
- *     path; current firmware keeps that API as a no-op compatibility hook
  *
  * The CPU runs the tracker engine (period table, effect column,
  * volume slides, arpeggios) at ~50 Hz; everything per-sample is the
@@ -97,12 +95,6 @@ static const uint16_t period_table[36] = {
 /* Convert Amiga period to playback rate in Hz.
  * Amiga base clock = 7093789.2 Hz (PAL), period is clock divider. */
 #define AMIGA_CLOCK 7093789
-
-/* Reserved Amiga-style low-pass settings. The current mixer firmware
- * ignores of_mixer_set_filter(), but keeping the values here preserves
- * the intended A500-style path for hardware that implements it later. */
-#define MOD_LPF_CUTOFF  35000
-#define MOD_LPF_Q       80
 
 /* Pre-computed 16.16 fixed-point rates for each period */
 static uint32_t period_to_rate_fp16(uint16_t period) {
@@ -319,7 +311,6 @@ static void trigger_note(channel_t *c, uint16_t period, int sample_offset) {
             /* Slot may have looped on the previous sample — clear the bit. */
             of_mixer_set_loop(c->voice, -1, 0);
         }
-        of_mixer_set_filter(c->voice, MOD_LPF_CUTOFF, MOD_LPF_Q, 1);
     }
 }
 
