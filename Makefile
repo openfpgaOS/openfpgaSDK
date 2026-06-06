@@ -18,6 +18,10 @@
 #      shares dist/sdk/ with every other SDK app, and ships in one ZIP.
 #      Created with `cd src/apps && make new APP=<name>`.
 #
+# Either way the app .elf is platform-neutral: `make copy` deploys it
+# to a Pocket SD card, `make copy TARGET=mister` pushes the same build
+# to a MiSTer over the network (see src/sdk/platforms/mister/).
+#
 # Quick start:
 #   make setup          Install RISC-V toolchain
 #   make core           Scaffold a custom core
@@ -74,7 +78,8 @@ help:
 	@echo "      /_/_/_/___\\___/_/ |_|"
 	@echo "     / __ \\/ __/"
 	@echo "    / /_/ /\\ \\"
-	@echo "    \\____/___/  \033[93mv0.3\033[0m SDK"
+	@printf '    \\____/___/  '
+	@printf "$(C_CMD)v0.6$(C_RESET) SDK\n"
 	@printf "$(C_RESET)\n"
 	@printf "  $(C_HEAD)Getting started:$(C_RESET)\n"
 	@printf "    $(C_CMD)make $(C_VERB)setup$(C_RESET)                    Install RISC-V toolchain\n"
@@ -83,8 +88,9 @@ help:
 	@printf "  $(C_HEAD)Custom core (work from src/$(A)/):$(C_RESET)\n"
 	@printf "    $(C_CMD)cd src/$(A)$(C_RESET)\n"
 	@printf "    $(C_CMD)make$(C_RESET)                          Build the custom core\n"
-	@printf "    $(C_CMD)make $(C_VERB)debug$(C_RESET)                    Build, push via UART, stream console\n"
+	@printf "    $(C_CMD)make $(C_VERB)debug$(C_RESET)                    Build, push via UART, stream console (Pocket)\n"
 	@printf "    $(C_CMD)make $(C_VERB)copy$(C_RESET)                     Copy this custom core to Pocket SD\n"
+	@printf "    $(C_CMD)make $(C_VERB)copy$(C_RESET) $(C_ARG)TARGET=mister$(C_RESET)       Push this custom core to a MiSTer\n"
 	@printf "    $(C_CMD)make $(C_VERB)package$(C_RESET)                  Package this custom core into a ZIP\n"
 	@printf "    $(C_CMD)make $(C_VERB)test$(C_RESET)                     Test on desktop (SDL2)\n"
 	@printf "    $(C_CMD)make $(C_VERB)clean$(C_RESET)                    Remove build artifacts\n"
@@ -112,6 +118,7 @@ help:
 	@printf "    $(C_CMD)make $(C_VERB)copy$(C_RESET)                     Copy SDK demo core + custom cores\n"
 	@printf "    $(C_CMD)make $(C_VERB)copy$(C_RESET) $(C_ARG)CORE=sdk$(C_RESET)            Copy SDK demo core only\n"
 	@printf "    $(C_CMD)make $(C_VERB)copy$(C_RESET) $(C_ARG)CORE=<core>$(C_RESET)         Copy the <core> custom core only\n"
+	@printf "    $(C_CMD)make $(C_VERB)copy$(C_RESET) $(C_ARG)CORE=<core> TARGET=mister$(C_RESET)  Push <core> to a MiSTer (network)\n"
 	@printf "    $(C_CMD)make $(C_VERB)package$(C_RESET)                  Package SDK demo core + every custom core\n"
 	@printf "    $(C_CMD)make $(C_VERB)tools$(C_RESET)                    Build PHDP host tools\n"
 	@printf "    $(C_CMD)make $(C_VERB)push$(C_RESET) $(C_ARG)DEST=\"path/to/sdk\"$(C_RESET)   Mirror src + os.bin into another SDK (keeps its core)\n"

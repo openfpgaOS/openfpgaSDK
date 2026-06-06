@@ -1,6 +1,6 @@
 # Getting Started
 
-Build games for the Analogue Pocket in C or C++. Five minutes from clone to running code.
+Build games for the Analogue Pocket and MiSTer in C or C++. Five minutes from clone to running code.
 
 ## 1. Clone
 
@@ -59,6 +59,8 @@ make copy
 
 Auto-detects the SD card, copies the openfpgaOS runtime + your app, and creates the right directory structure. Eject, boot the Pocket, and your app appears in the menu.
 
+Have a MiSTer instead? `make copy TARGET=mister` pushes the same build over the network — see [Multiplatform](#multiplatform) below.
+
 ## 6. Test on desktop (optional)
 
 If you have SDL2 installed:
@@ -86,8 +88,9 @@ openfgpaSDK/
 │   ├── sdk/                 ← SDK (don't edit)
 │   │   ├── include/         ← openfpgaOS API (of.h, of_video.h, ...)
 │   │   ├── musl/            ← bundled musl C library + linker script
-│   │   ├── platforms/       ← platform templates & copy scripts
-│   │   │   └── pocket/      ← Analogue Pocket target
+│   │   ├── platforms/       ← platform packaging & deploy scripts
+│   │   │   ├── pocket/      ← Analogue Pocket target
+│   │   │   └── mister/      ← MiSTer target
 │   └── apps/                ← bundled demo apps (reference code)
 ├── dist/sdk/                ← SDK core configs (SDK-owned, auto-deployed)
 ├── runtime/                 ← FPGA bitstream, OS binary, loader
@@ -112,8 +115,9 @@ From `src/mygame/`:
 | Command | What it does |
 |---------|-------------|
 | `make` | Build `mygame.elf` |
-| `make debug` | Build, push via UART, stream console |
+| `make debug` | Build, push via UART, stream console (Pocket-only) |
 | `make copy` | Copy to Pocket SD card |
+| `make copy TARGET=mister` | Push to a MiSTer over the network |
 | `make package` | Create distributable ZIP |
 | `make test` | Test on desktop (SDL2) |
 | `make clean` | Remove build artifacts |
@@ -190,14 +194,14 @@ See [README.md](README.md) for the full API reference.
 
 ## Multiplatform
 
-Apps target a platform. The default is `pocket` (Analogue Pocket). Platform-specific logic — copy scripts, directory layout, JSON format — lives in `src/sdk/platforms/<target>/`.
+Apps build once and run on two platforms: the Analogue Pocket and MiSTer (DE10-Nano / SuperStation One). The same `mygame.elf` runs unchanged on both — only the deploy step differs. Platform-specific logic — copy scripts, packaging, disk-image building — lives in `src/sdk/platforms/<target>/`.
 
 ```bash
-make core --target pocket     # Analogue Pocket (default)
-# make core --target mister   # MiSTer (coming soon)
+make copy                     # Analogue Pocket SD card (default)
+make copy TARGET=mister       # push the same build to a MiSTer over the network
 ```
 
-Your C code is the same across all platforms. Only the copy and packaging differ.
+See the [Multiplatform section in README.md](README.md#multiplatform) for the MiSTer quickstart.
 
 ## Updating the SDK
 

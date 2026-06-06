@@ -57,3 +57,10 @@ path = ["**/*.mod", "**/*.mid"]
 precedence = "override"
 SPDX-FileCopyrightText = "Third-party tracker modules / MIDI songs; rights belong to their respective composers"
 SPDX-License-Identifier = "LicenseRef-ThirdParty-Media"
+
+# ===== FatFs (vendored, pristine — ChaN R0.15a) =============================
+[[annotations]]
+path = "src/sdk/platforms/mister/fatfs/**"
+precedence = "override"
+SPDX-FileCopyrightText = "Copyright (C) 2025, ChaN"
+SPDX-License-Identifier = "BSD-1-Clause"

@@ -1,8 +1,8 @@
 # openfpgaOS SDK
 
-Build games for the [Analogue Pocket](https://www.analogue.co/pocket) in C or C++.
+Build games for the [Analogue Pocket](https://www.analogue.co/pocket) and [MiSTer](https://mister-devel.github.io/MkDocs_MiSTer/) (DE10-Nano / SuperStation One) in C or C++. The same app `.elf` runs unchanged on both platforms — see [Multiplatform](#multiplatform).
 
-**Hardware:** VexiiRiscv rv32imafc @ 100 MHz, 8 KB I-cache + 32 KB D-cache, 64 MB SDRAM, 320x240 video, 48 kHz stereo audio, 32-voice hardware PCM mixer, and sample-based MIDI playback.
+**Hardware (both platforms):** VexiiRiscv rv32imafc @ 100 MHz, 8 KB I-cache + 32 KB D-cache, 64 MB SDRAM, 320x240 video, 48 kHz stereo audio, 32-voice hardware PCM mixer, and sample-based MIDI playback.
 
 > **New here?** See [GETTING_STARTED.md](GETTING_STARTED.md) — clone to running code in 5 minutes.
 
@@ -16,6 +16,7 @@ make core                     # create your app (follow the prompts)
 cd src/mygame
 make                          # build mygame.elf
 make copy                   # copy to Pocket SD card
+make copy TARGET=mister     # ...or push the same build to a MiSTer
 ```
 
 ### Toolchain
@@ -460,7 +461,9 @@ of_set_idle_hook(NULL);               // Disable
 
 10 persistent save slots (256 KB each), mapped to APF file IDs 10-19.
 Slot 8 is reserved for SDK/shared config and is not an app save slot.
-Dirty save files are committed through the bridge when closed.
+Dirty save files are committed through the bridge when closed. On MiSTer
+the same slots are preallocated 256 KB files inside the disk image
+(`/saves/slot_N.sav`) written through on every write — same API, same code.
 
 **Preferred: standard C file I/O with the save filename from the instance JSON:**
 
@@ -531,7 +534,7 @@ uint32_t status = of_link_status();        // Connection status
 
 ### Interact — `of_interact.h`
 
-Read Pocket menu options (defined in `interact.json`). Up to 64 variables.
+Read Pocket menu options (defined in `interact.json`). Up to 64 variables. **Pocket-only** — MiSTer has no `interact.json` menus.
 
 ```c
 uint32_t val = of_interact_get(0);    // Read variable at index 0
@@ -545,6 +548,8 @@ Variable indices match `interact.json` order. The first 4 are reserved by the SD
 int enabled = of_analogizer_enabled();    // 1 if Analogizer hardware present
 uint32_t state = of_analogizer_state();   // SNAC type, video mode, offsets
 ```
+
+Analogizer/SNAC are Pocket peripherals; on MiSTer `of_analogizer_enabled()` returns 0. Gate optional hardware with `of_has_feature(OF_HW_ANALOGIZER)`.
 
 ### Audio Codec — `of_codec.h`
 
@@ -643,11 +648,19 @@ When there's only one instance JSON for your app, the Pocket auto-selects it —
 - Save slots use bridge address `0x20100000` (CRAM0 save window) with 256 KB stride
 - Place data files in your app directory — copy copies them to the SD card
 
+On MiSTer the same slot ids resolve to fixed paths inside the
+`openfpgaOS.vhd` disk image (`/os.ini`, `/app.elf`, `/saves/slot_N.sav`,
+`/assets/*`, …) and the filename registry is populated by a directory
+scan — `instance.json` is an APF manifest and isn't deployed there. Apps
+open data files by filename either way; nothing changes in your code.
+See [src/sdk/platforms/mister/README.md](src/sdk/platforms/mister/README.md)
+for the full slot→path contract.
+
 ---
 
 ## UART Development (PHDP)
 
-The **Pocket-Host Debug Protocol** streams binaries over UART at 2 Mbaud, bypassing the SD card for rapid iteration. Requires a DevKey cartridge connected via USB-UART adapter.
+The **Pocket-Host Debug Protocol** streams binaries over UART at 2 Mbaud, bypassing the SD card for rapid iteration. Requires a DevKey cartridge connected via USB-UART adapter. **Pocket-only** — on MiSTer the fast iteration loop is the network push (`make copy TARGET=mister`).
 
 ### Architecture
 
@@ -741,24 +754,71 @@ make                                # rebuild your app
 
 ## Multiplatform
 
-The SDK is designed for multiple hardware targets. Platform-specific logic — JSON templates, copy scripts, directory layout — lives in `src/sdk/platforms/<target>/`.
+One SDK, two hardware platforms, **one binary**:
+
+- **pocket** — Analogue Pocket (openFPGA/APF)
+- **mister** — MiSTer: DE10-Nano and SuperStation One
+
+The same app `.elf` runs unchanged on both — no rebuild, no per-platform flags. Nothing target-specific is compiled into your app: the platform id, hardware feature bits, and memory/service addresses all arrive at runtime through the capability and services tables (auxv). Apps that care about the difference gate at runtime:
+
+```c
+if (of_get_caps()->platform_id == OF_PLATFORM_MISTER) { /* ... */ }
+if (of_has_feature(OF_HW_ANALOGIZER)) { /* Pocket with Analogizer */ }
+```
+
+### The deploy split
+
+The [openfpgaOS](https://github.com/openfpgaOS/openfpgaOS) repo only **builds** the cores; this SDK owns **all** device deployment — Pocket deploys by SD-card copy, MiSTer by network push. Platform-specific packaging and deploy logic lives in `src/sdk/platforms/<target>/`:
 
 ```
 src/sdk/platforms/
-├── pocket/                  ← Analogue Pocket (current)
-│   ├── templates/*.json     ← APF JSON config templates
-│   └── copy.sh            ← SD card copy script
-└── mister/                  ← MiSTer FPGA (planned)
-    ├── templates/            ← MiSTer-specific configs
-    └── copy.sh             ← MiSTer copy script
+├── pocket/                   ← Analogue Pocket
+│   ├── templates/*.json      ← APF JSON config templates
+│   └── copy.sh               ← deploy: copy to the SD card
+└── mister/                   ← MiSTer (DE10-Nano / SuperStation One)
+    ├── mkimage.c, mkimage.sh ← FAT32 disk-image builder (vendored FatFs;
+    │                            no mtools or root needed)
+    ├── copy.sh               ← deploy: network push (scp)
+    ├── fatfs/                ← vendored ChaN FatFs (never edit)
+    └── README.md             ← artifacts + the slot→path contract
 ```
 
-Your C code is the same across all platforms. When creating an app:
+The per-platform core artifacts live under `runtime/` and are synced from an openfpgaOS checkout with `make sdk DEST=path/to/this/sdk` — they are build artifacts, not files to edit:
+
+- `runtime/` — Pocket: `bitstream.rbf_r`, `os.bin`, `loader.bin`, `bank.ofsf`
+- `runtime/mister/` — MiSTer: `openfpgaOS.rbf`, `os.bin`
+
+### MiSTer quickstart
+
+Build exactly as for the Pocket, then point `make copy` at the other platform:
 
 ```bash
-make core                               # default: pocket
-make core --target mister              # future: MiSTer
+cd src/mygame
+make                                             # the same mygame.elf the Pocket runs
+make copy TARGET=mister                          # push to mister.local
+MISTER_IP=192.168.1.42 make copy TARGET=mister   # or a specific device
 ```
+
+`copy.sh` assembles the FAT32 disk image (`openfpgaOS.vhd`) from your ELF plus the asset files sitting next to it, then pushes everything over the network:
+
+- `openfpgaOS.rbf` → `/media/fat/_Console/`
+- `boot.rom` + `openfpgaOS.vhd` → `/media/fat/games/openfpgaOS/`
+
+Load the core from the MiSTer menu and mount `openfpgaOS.vhd` once from the OSD — MiSTer remembers the mount. For core-only bring-up before an app exists:
+
+```bash
+src/sdk/platforms/mister/copy.sh core 192.168.1.42   # pushes runtime/mister/ only
+```
+
+Inside the image your app opens data files by filename, exactly as on Pocket (`/assets/*`, saves in `/saves/`). Two rules carry over: filenames are limited to 23 characters (the same registry limit as Pocket), and **never recreate the image's save/config files with ordinary tools** — they are preallocated contiguously so the firmware can persist saves without ever touching FAT metadata at runtime; that is the power-cut safety guarantee. `MISTER_IMAGE_MB` overrides the default 64 MB image size; `mkimage.sh` compiles its image tool with the host `cc` on first use. Full details — the artifact table and the slot→path contract — in [src/sdk/platforms/mister/README.md](src/sdk/platforms/mister/README.md).
+
+### What stays Pocket-only
+
+- `make debug` — UART/PHDP streaming (needs the DevKey cartridge). On MiSTer, iterate with the network push instead.
+- `interact.json` menus (`of_interact_get`).
+- Analogizer / SNAC — `of_analogizer_enabled()` returns 0 on MiSTer.
+
+Everything else — video, audio, GPU, mixer, MIDI, saves, file I/O, the SDL2 layer — is identical.
 
 ---
 
@@ -769,8 +829,9 @@ make core --target mister              # future: MiSTer
 | Command | What it does |
 |---------|-------------|
 | `make` | Build your app |
-| `make debug` | Build, push via UART, stream console |
+| `make debug` | Build, push via UART, stream console (Pocket-only) |
 | `make copy` | Copy to Pocket SD card |
+| `make copy TARGET=mister` | Push to a MiSTer over the network |
 | `make package` | Package core into a ZIP |
 | `make test` | Test on desktop (SDL2) |
 | `make clean` | Remove build artifacts |
@@ -796,6 +857,7 @@ make core --target mister              # future: MiSTer
 | `make debug APP=<app>` | Build, push via UART, stream console |
 | `make copy` | Copy everything to SD card |
 | `make copy APP=<app>` | Copy sdk or a specific app |
+| `make copy CORE=<core> TARGET=mister` | Push a custom core to a MiSTer |
 | `make tools` | Build PHDP host tools |
 | `make package` | Package all cores into ZIPs |
 | `make clean` | Remove all build artifacts |
@@ -873,14 +935,17 @@ openfgpaSDK/
 │   └── sdk/              <- Headers, musl libc, build rules (SDK-owned)
 │       ├── include/      <- openfpgaOS API headers
 │       ├── musl/         <- bundled musl C library + linker script
-│       ├── platforms/    <- Platform templates & copy scripts
-│       │   └── pocket/   <- Analogue Pocket target
+│       ├── platforms/    <- Platform packaging & deploy scripts
+│       │   ├── pocket/   <- Analogue Pocket target (templates + SD copy)
+│       │   └── mister/   <- MiSTer target (disk-image builder + network copy)
 │       └── pc/           <- SDL2 shim for desktop builds
 ├── dist/                 <- Static core configs (SD card layout)
 │   ├── sdk/              <- SDK core (Cores/, Assets/, Platforms/)
 │   └── <mygame>/         <- Your app's core (created by make core)
 ├── scripts/              <- Build/copy/packaging scripts (SDK-owned)
-└── runtime/              <- FPGA bitstream, OS binary, loader (SDK-owned)
+└── runtime/              <- Core artifacts, synced from openfpgaOS (SDK-owned)
+    ├── ...               <- Pocket: bitstream, os.bin, loader, bank.ofsf
+    └── mister/           <- MiSTer: openfpgaOS.rbf, os.bin
 ```
 
 ### What you change vs. what the SDK owns
@@ -910,4 +975,4 @@ SDK-owned files (headers, core configs, runtime, templates) update automatically
 
 ## Reference
 
-This SDK builds apps for [openfpgaOS](https://github.com/openfpgaOS/openfpgaOS) — a RISC-V operating system running on the Analogue Pocket's Cyclone V FPGA. The openfpgaOS repo is the source of truth for API headers and the OS kernel. See that repo for architecture details, FPGA design, and OS internals.
+This SDK builds apps for [openfpgaOS](https://github.com/openfpgaOS/openfpgaOS) — a RISC-V operating system running on a Cyclone V FPGA in the Analogue Pocket and on MiSTer (DE10-Nano / SuperStation One). The openfpgaOS repo is the source of truth for API headers and the OS kernel — it builds the cores; this SDK deploys them. See that repo for architecture details, FPGA design, and OS internals.
