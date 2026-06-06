@@ -453,8 +453,8 @@ long sz = of_file_size(slot_id);                         // File size in bytes
 **Idle hook** — called during DMA waits for background work (e.g., audio pump):
 
 ```c
-of_set_idle_hook(my_audio_pump);      // Called by OS during bridge waits
-of_set_idle_hook(NULL);               // Disable
+of_file_set_idle_hook(my_audio_pump); // Called by OS during bridge waits
+of_file_set_idle_hook(NULL);          // Disable
 ```
 
 ### Save Files
