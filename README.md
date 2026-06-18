@@ -1,4 +1,4 @@
-# openfpgaOS SDK
+# openfgpaOS SDK
 
 Build games for the [Analogue Pocket](https://www.analogue.co/pocket) and [MiSTer](https://mister-devel.github.io/MkDocs_MiSTer/) (DE10-Nano / SuperStation One) in C or C++. The same app `.elf` runs unchanged on both platforms — see [Multiplatform](#multiplatform).
 
