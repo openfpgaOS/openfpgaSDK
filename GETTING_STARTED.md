@@ -5,8 +5,8 @@ Build games for the Analogue Pocket and MiSTer in C or C++. Five minutes from cl
 ## 1. Clone
 
 ```bash
-git clone https://github.com/openfpgaOS/openfgpaSDK.git
-cd openfgpaSDK
+git clone https://github.com/openfpgaOS/openfpgaSDK.git
+cd openfpgaSDK
 ```
 
 ## 2. Setup
@@ -79,7 +79,7 @@ Same code, runs in a window on your computer. Useful for quick iteration.
 After `make core`, your app directory looks like:
 
 ```
-openfgpaSDK/
+openfpgaSDK/
 ├── src/
 │   ├── mygame/              ← YOUR code
 │   │   ├── Makefile

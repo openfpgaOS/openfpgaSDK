@@ -9,8 +9,8 @@ Build games for the [Analogue Pocket](https://www.analogue.co/pocket) and [MiSTe
 ## Quick Start
 
 ```bash
-git clone https://github.com/openfpgaOS/openfgpaSDK.git
-cd openfgpaSDK
+git clone https://github.com/openfpgaOS/openfpgaSDK.git
+cd openfpgaSDK
 make setup                    # install RISC-V toolchain
 make core                     # create your app (follow the prompts)
 cd src/mygame
@@ -1009,7 +1009,7 @@ For larger ports (Duke Nukem, Doom, etc.) that carry their own build system:
 ## Project Structure
 
 ```
-openfgpaSDK/
+openfpgaSDK/
 ├── Makefile              <- Top-level: build, copy, debug, package
 ├── GETTING_STARTED.md    <- Quick start guide for developers
 ├── src/
