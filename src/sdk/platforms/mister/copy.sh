@@ -83,6 +83,7 @@ fi
 
 [[ -z "$PUSH_BOOT" && -f "$RUNTIME/os.bin" ]] && PUSH_BOOT="$RUNTIME/os.bin"
 [[ -f "$RUNTIME/openfpgaOS.rbf" ]] && PUSH_RBF="$RUNTIME/openfpgaOS.rbf"
+[[ -f "$OUT_DIR/openfpgaOS.rbf" ]] && PUSH_RBF="$OUT_DIR/openfpgaOS.rbf"
 
 [[ -z "$PUSH_VHD$PUSH_BOOT$PUSH_RBF" ]] && \
     fail "nothing to push — build an app image or sync core artifacts (openfpgaOS: make sdk DEST=...)"

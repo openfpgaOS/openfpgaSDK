@@ -248,6 +248,12 @@ static uint32_t _gpu_base;
 #define GPU_TEX_FLUSH           OF_GPU_REG(0x28)  /* W: flush texture cache */
 #define GPU_DMA_KICK            OF_GPU_REG(0x2C)  /* W: write 1 to fire DMA pull from (SRC, LEN) */
 #define GPU_PALOOKUP_BASE       OF_GPU_REG(0x30)  /* W/R: SDRAM byte base for palookup slots */
+/* SDK-INTERNAL fast-texture-memory control.  Apps use of_texture.h and never
+ * touch these — which memory backs "fast textures" (a dedicated sync-burst chip
+ * on Pocket, nothing on MiSTer) is an implementation detail. */
+#define _GPU_FAST_TEX_ENABLE    OF_GPU_REG(0x38)  /* bit0 = route tex-cache fills to fast mem */
+#define _GPU_FAST_TEX_UP_ADDR   OF_GPU_REG(0x08)  /* fast-tex upload word pointer (auto-inc) */
+#define _GPU_FAST_TEX_UP_DATA   OF_GPU_REG(0x3C)  /* W: upload data word; R bit0 = upload busy */
 
 /* GPU_STATUS bit definitions */
 #define GPU_STATUS_BUSY        0x1u
@@ -920,6 +926,33 @@ static inline void of_gpu_set_framebuffer(uint32_t addr, uint16_t stride) {
     _gpu_state_fb_addr = addr;
     _gpu_state_fb_stride = (uint32_t)stride;
     _gpu_state_valid |= OF_GPU_STATE_FB;
+}
+
+/* ================================================================
+ * SDK-INTERNAL fast-texture-memory primitives.  These are the only place that
+ * knows the dedicated texture chip exists; of_texture.h drives them and apps
+ * use of_texture.h.  (Names carry no hardware token on purpose.)
+ * ================================================================ */
+
+/* Route the GPU texture cache (and its colormap port) to fast memory
+ * (enable=1) or SDRAM (enable=0).  GPU must be idle — flushes the tex cache.
+ * No-op where there is no fast texture memory. */
+static inline void _of_gpu_route_fast_tex(int enable) {
+    _GPU_FAST_TEX_ENABLE = enable ? 1u : 0u;
+    GPU_TEX_FLUSH = 1u;
+}
+
+/* Stream `nwords` 32-bit words into fast texture memory at byte offset
+ * `byte_off` (hardware auto-increment; polls the busy bit so it can't overrun).
+ * Load-time / GPU-idle. */
+static inline void _of_gpu_fast_tex_upload(uint32_t byte_off,
+                                           const uint32_t *data, uint32_t nwords) {
+    _GPU_FAST_TEX_UP_ADDR = byte_off >> 2;        /* byte -> word address */
+    for (uint32_t i = 0; i < nwords; i++) {
+        while (_GPU_FAST_TEX_UP_DATA & 1u) { }    /* wait prior word drained */
+        _GPU_FAST_TEX_UP_DATA = data[i];          /* kick word_wr + auto-inc */
+    }
+    while (_GPU_FAST_TEX_UP_DATA & 1u) { }        /* drain the last word */
 }
 
 static inline void of_gpu_bind_texture(const of_gpu_texture_t *tex) {
@@ -1609,6 +1642,16 @@ static inline void of_gpu_submit_command_stream_batch(const uint32_t *words,
 #else /* OF_PC — desktop has no HW GPU; provide no-op stubs so apps that
        *         exercise the GPU API still link in the SDL2 test build. */
 
+/* Raw GPU registers + ring/DMA debug counters that some ports' emit layers
+ * (e.g. of_emit_q2.c) poke directly, bypassing the function API.  On the
+ * desktop they sink to harmless dummies so those TUs compile and the writes
+ * are no-ops — the soft renderer does the real work here. */
+static volatile uint32_t _of_pc_gpu_reg_sink;
+#define GPU_TEX_FLUSH       _of_pc_gpu_reg_sink
+#define GPU_PALOOKUP_BASE   _of_pc_gpu_reg_sink
+static uint32_t _gpu_dbg_ring_waits, _gpu_dbg_ring_spin_iters;
+static uint32_t _gpu_dbg_dma_waits,  _gpu_dbg_dma_spin_iters;
+
 typedef struct {
     uint32_t status, rdptr, wrptr, fence_reached;
     uint32_t dma_waits, dma_spin_iters;
@@ -1675,6 +1718,8 @@ static inline void of_gpu_set_framebuffer(uint32_t addr, uint16_t stride) {
     (void)addr; (void)stride;
 }
 static inline void of_gpu_bind_texture(const of_gpu_texture_t *tex)       { (void)tex; }
+static inline void _of_gpu_route_fast_tex(int enable)                     { (void)enable; }
+static inline void _of_gpu_fast_tex_upload(uint32_t off, const uint32_t *data, uint32_t n) { (void)off; (void)data; (void)n; }
 static inline void of_gpu_clear(uint32_t flags, uint16_t color)           { (void)flags; (void)color; }
 static inline void of_gpu_clear_rect(uint32_t addr, uint16_t w, uint16_t h,
                                      uint8_t color) {
@@ -1708,6 +1753,11 @@ static inline void of_gpu_draw_param_tri(const of_gpu_param_span_list_t *p,
 static inline void of_gpu_draw_param_tri_recs(const of_gpu_param_span_list_t *p,
                                               const of_gpu_tri_vert_t v[3]) {
     (void)p; (void)v;
+}
+static inline void of_gpu_draw_param_span_list(const of_gpu_param_span_list_t *params,
+                                               const of_gpu_param_span_record_t *records,
+                                               uint32_t record_count) {
+    (void)params; (void)records; (void)record_count;
 }
 static inline void of_gpu_submit_command_stream_batch(const uint32_t *words, int count) {
     (void)words; (void)count;

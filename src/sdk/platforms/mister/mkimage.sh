@@ -63,8 +63,10 @@ fi
 # ── Collect payload specs ────────────────────────────────────────────
 SPECS=("$OSINI=/os.ini" "$ELF=/app.elf")
 
-BANK="$SDK_ROOT/runtime/bank.ofsf"
-[[ -f "$BANK" ]] && SPECS+=("$BANK=/bank.ofsf")
+# Soundfonts (bank.ofsf + any game .ofsf) → image root, opened by name.
+for s in "$SDK_ROOT"/runtime/*.ofsf; do
+    [[ -f "$s" ]] && SPECS+=("$s=/$(basename "$s")")
+done
 
 for a in "${ASSETS[@]}"; do
     [[ -f "$a" ]] || fail "asset not found: $a"
@@ -82,4 +84,10 @@ if [[ -f "$SDK_ROOT/runtime/mister/os.bin" ]]; then
 else
     echo "  note: runtime/mister/os.bin missing — sync it from openfpgaOS:"
     echo "        make os TARGET=mister && make sdk DEST=path/to/this/sdk"
+fi
+
+# ── core bitstream alongside, for a self-contained bundle ────────────
+if [[ -f "$SDK_ROOT/runtime/mister/openfpgaOS.rbf" ]]; then
+    cp "$SDK_ROOT/runtime/mister/openfpgaOS.rbf" "$OUT_DIR/openfpgaOS.rbf"
+    ok "openfpgaOS.rbf (core bitstream)"
 fi
