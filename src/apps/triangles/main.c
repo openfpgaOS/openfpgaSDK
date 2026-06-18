@@ -40,6 +40,7 @@
 #include <of.h>
 #include <of_cache.h>
 #include <of_gpu.h>
+#include <of_texture.h>
 
 #include "brick_tex.h"
 
@@ -70,6 +71,14 @@ static uint8_t  *hud_tex;
 static uint16_t *zbuf;
 static uint8_t   colormap[CMAP_ROWS * 256];
 static uint32_t  pal_rgb[256];
+
+/* Fast texture memory (os30 `OF_HW_GPU_FAST_TEX`).  When it fits the colormap +
+ * both textures, everything lives in the fast tier and the GPU fetch domain
+ * never flips — see the main() setup.  Otherwise tex_fast stays 0 and the
+ * SDRAM path (CPU-address tex_addr + palookup_upload) is used, exactly as on a
+ * core without fast memory. */
+static of_texture_t cube_th, hud_th;
+static int          tex_fast;
 
 /* Active video mode (runtime). */
 static int   vw = 320, vh = 240, fb_stride = 320, hires = 0;
@@ -178,7 +187,17 @@ static void hud_update(const char *l1, const char *l2)
     memset(hud_tex, PAL_HUD_PLATE, HUD_W * HUD_H);
     hud_text(2, 1, l1, PAL_HUD_TEXT);
     hud_text(2, 9, l2, PAL_HUD_TEXT);
-    of_cache_flush_range(hud_tex, HUD_W * HUD_H);
+    if (tex_fast) {
+        /* The HUD lives in the fast tier; re-upload in place so the domain
+         * never has to flip to SDRAM.  Drain first — this only runs when the
+         * text actually changes (~once a second), so the cost is negligible,
+         * and it stops us clobbering a frame still fetching the old HUD. */
+        of_gpu_finish();
+        _of_gpu_fast_tex_upload(of_texture_gpu_addr(&hud_th),
+                                (const uint32_t *)hud_tex, (HUD_W * HUD_H + 3) >> 2);
+    } else {
+        of_cache_flush_range(hud_tex, HUD_W * HUD_H);
+    }
     snprintf(hud_l1, sizeof(hud_l1), "%s", l1);
     snprintf(hud_l2, sizeof(hud_l2), "%s", l2);
 }
@@ -312,7 +331,8 @@ static void bind_cube_surface(uint32_t fb_addr)
     st.fb_base       = fb_addr;
     st.fb_major_step = fb_stride;
     st.fb_minor_step = 1;
-    st.tex_addr      = (uint32_t)(uintptr_t)cube_tex;
+    st.tex_addr      = tex_fast ? of_texture_gpu_addr(&cube_th)
+                                : (uint32_t)(uintptr_t)cube_tex;
     st.tex_width     = TEX_W;
     st.tex_w_mask    = TEX_W - 1;
     st.tex_h_mask    = TEX_H - 1;
@@ -338,7 +358,8 @@ static void emit_hud_quad(uint32_t fb_addr)
     st.fb_base       = fb_addr;
     st.fb_major_step = fb_stride;
     st.fb_minor_step = 1;
-    st.tex_addr      = (uint32_t)(uintptr_t)hud_tex;
+    st.tex_addr      = tex_fast ? of_texture_gpu_addr(&hud_th)
+                                : (uint32_t)(uintptr_t)hud_tex;
     st.tex_width     = HUD_W;
     st.tex_w_mask    = HUD_W - 1;
     st.tex_h_mask    = HUD_H - 1;
@@ -509,7 +530,6 @@ int main(int argc, char **argv)
         no_vert_tri("no GPU span unit / gpu_base");
 
     of_gpu_init();
-    of_gpu_palookup_upload(0, colormap, sizeof(colormap));
 
     const uint32_t need = OF_HW_GPU_VERT_TRI | OF_HW_GPU_PARAM_TRI |
                           OF_HW_GPU_PERSP   | OF_HW_GPU_PARAM_SPAN_LIST;
@@ -526,10 +546,34 @@ int main(int argc, char **argv)
     int draw_idx = of_video_acquire_next(-1, 0);
     if (!probe_gpu(draw_idx))
         no_vert_tri("GPU fence never retired (OS/bitstream issue, not the demo)");
+
+    /* Texture residence (after the GPU is verified — of_texture_bind drains).
+     * os30 has a dedicated fast-texture tier.  Use it for the colormap AND both
+     * textures so the GPU's fetch domain never flips mid-frame (a flip calls
+     * of_gpu_finish(), which would break the CPU/GPU overlap).  Only take the
+     * fast path if it ALL fits in one domain; otherwise fall back to the SDRAM
+     * path (CPU-address tex_addr + palookup slot) used on cores without it. */
+    of_texture_init();
+    {
+        uint32_t fast_need = (uint32_t)sizeof(colormap)
+                           + TEX_W * TEX_H + HUD_W * HUD_H + 64u;
+        tex_fast = of_texture_has_fast_mem() &&
+                   of_texture_budget_free() >= fast_need;
+    }
+    if (tex_fast) {
+        memset(hud_tex, PAL_HUD_PLATE, HUD_W * HUD_H);    /* sane initial HUD */
+        of_texture_set_colormap(colormap, sizeof(colormap));      /* fast + SDRAM */
+        of_texture_create(&cube_th, cube_tex, TEX_W, TEX_H, TEX_W * TEX_H);
+        of_texture_create(&hud_th,  hud_tex,  HUD_W, HUD_H, HUD_W * HUD_H);
+        of_texture_bind(&cube_th);    /* route the fetch domain → fast (it stays) */
+    } else {
+        of_gpu_palookup_upload(0, colormap, sizeof(colormap));
+    }
+
     of_video_set_display_mode(OF_DISPLAY_FRAMEBUFFER);
 
-    printf("[triangles] ready (HW vert-tri, %dx%d, z-buffer=%s)\n",
-           vw, vh, has_zbuffer ? "on" : "off");
+    printf("[triangles] ready (HW vert-tri, %dx%d, z-buffer=%s, fast-tex=%s)\n",
+           vw, vh, has_zbuffer ? "on" : "off", tex_fast ? "on" : "off");
 
     float orbit = 0.5f, spin = 0.0f;
     uint32_t stat_tick = of_time_us();
