@@ -141,6 +141,12 @@ extern "C" {
                                          * of_texture.h, which falls back to
                                          * SDRAM when it is 0).  Pocket OS30
                                          * sets it; OS25 clears it. */
+#define OF_HW_GPU_XFORM_RGB (1 << 26)   /* GPU transform front-end truecolor +
+                                         * vertex cache + per-vertex lighting:
+                                         * 0x52 xform_tri_rgb, 0x53 load_verts,
+                                         * 0x54 draw_indexed_tri, 0x55
+                                         * set_light_state, 0x57 load_vert_lit.
+                                         * Pocket os30/SM64 sets it. */
 
 /* Convenience: all the GPU bits an app might care about for renderer choice. */
 #define OF_HW_GPU_LITE_MASK  (OF_HW_GPU_SPAN | OF_HW_GPU_FRAGPIPE)
