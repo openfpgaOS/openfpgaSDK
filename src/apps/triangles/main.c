@@ -5,24 +5,32 @@
 //------------------------------------------------------------------------------
 
 /*
- * triangles: the canonical "drive this GPU well" example.
+ * triangles: the canonical "drive this GPU well" example — CPU geometry feeding
+ * the os30 hardware vert-tri raster.
  *
- * A grid of spinning brick-textured cubes rendered through the OS30 hardware
- * vertex-triangle path (GPU_CMD_SET_TRI_STATE 0x4A + GPU_CMD_DRAW_VERT_TRI
- * 0x4B): the CPU only transforms vertices; the GPU derives the perspective
- * planes, edge-walks, perspective-divides, clips, lights via palookup, and
- * depth-tests.  See Quake2's sw_polyset.c for the same path in a real engine.
+ * A grid of spinning brick-textured cubes.  The os30 bitstream builds the
+ * vert-tri rasteriser (VERT_TRI + VCOLOR/DIRECT_COLOR + PERSP) but deliberately
+ * does NOT build the transform-and-light front-end (no INCLUDE_XFORM /
+ * OF_HW_GPU_XFORM_RGB), so the CPU does the per-vertex math itself: for each
+ * visible face vertex it applies the shared model->camera matrix, perspective-
+ * projects to screen, and forms the perspective texture terms (raw texel s/t
+ * plus a per-triangle-scaled 1/w in zi) and the decoupled z-buffer depth.  It
+ * then streams screen-space, perspective-correct, depth-tested, truecolour
+ * triangles via GPU_CMD_DRAW_VERT_TRI_RGB (0x4E / of_gpu_draw_vert_tri_rgb) on
+ * top of a sticky 0x4A surface state.  The GPU edge-walks, perspective-divides
+ * texel = interp(s*zi)/interp(zi), samples the brick texture, modulates by the
+ * per-vertex shade colour, and z-tests against an SDRAM z-buffer.
  *
- * Built to scale to hundreds of cubes.  The optimization that makes that cheap:
- * every cube shares ONE orientation and size, so the rotation matrix, the eight
- * rotated corner offsets, the six face normals, and the six face light levels
- * are computed ONCE per frame.  A cube then costs only: one transform of its
- * centre, a frustum test, and — per visible face — a back-face cull plus a
- * projection of four vertices (one divide each, fixed-point UVs precomputed).
- * Off-screen and behind-camera cubes are skipped whole.  All framebuffer
- * writes (incl. the HUD) go through the GPU; the frame is paced by the flip
- * fence with triple buffering, so CPU geometry for frame N+1 overlaps GPU
- * raster of frame N — no blocking fence wait.
+ * Lighting is flat per face: every cube shares ONE orientation, so the
+ * model->camera rotation and the object-space light direction are computed
+ * ONCE per frame; the face N.L (normals are object-space, the light is rotated
+ * into object space to match) gives a single RGB565 shade applied to all six
+ * vertices of the face's two triangles.  A cube costs only: a frustum test
+ * and — per visible face — a back-face cull plus four projected corners and two
+ * triangles.  Off-screen and behind-camera cubes are skipped whole.  All
+ * framebuffer writes (incl. the HUD) go through the GPU; the frame is paced by
+ * the flip fence with triple buffering, so CPU geometry for frame N+1 overlaps
+ * GPU raster of frame N — no blocking fence wait.
  *
  * Controls:
  *   d-pad UP / DOWN   more / fewer cubes (grid grows N x N)
@@ -46,7 +54,6 @@
 
 #define TEX_W BRICK_W            /* 64 */
 #define TEX_H BRICK_H            /* 64 */
-#define CMAP_ROWS 64
 
 #define MAX_W 640                /* buffers sized for the largest mode */
 #define MAX_H 480
@@ -65,24 +72,35 @@
 #define HUD_Y    3
 
 #define ZBUF_ELEM 2             /* RTL-hardwired 16-bit z entries */
+#define FB_BPP    2             /* RGB565 truecolour framebuffer: 2 bytes/pixel */
 
-static uint8_t  *cube_tex;
-static uint8_t  *hud_tex;
+/* float -> Q16.16 (the wire format for verts, normals, matrices). */
+#define Q16(f) ((int32_t)lrintf((f) * 65536.0f))
+
+/* 0x00RRGGBB -> RGB565 (the truecolour texel / vertex-colour format). */
+static inline uint16_t rgb565_888(uint32_t c)
+{
+    uint32_t r = (c >> 16) & 0xFF, g = (c >> 8) & 0xFF, b = c & 0xFF;
+    return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+}
+
+static uint16_t *cube_tex;       /* RGB565 brick texels */
+static uint16_t *hud_tex;        /* RGB565 HUD plate + glyphs */
 static uint16_t *zbuf;
-static uint8_t   colormap[CMAP_ROWS * 256];
-static uint32_t  pal_rgb[256];
 
-/* Fast texture memory (os30 `OF_HW_GPU_FAST_TEX`).  When it fits the colormap +
- * both textures, everything lives in the fast tier and the GPU fetch domain
- * never flips — see the main() setup.  Otherwise tex_fast stays 0 and the
- * SDRAM path (CPU-address tex_addr + palookup_upload) is used, exactly as on a
- * core without fast memory. */
+/* Fast texture memory (os30 `OF_HW_GPU_FAST_TEX`).  When both RGB565 textures
+ * fit, everything lives in the fast tier and the GPU fetch domain never flips —
+ * see the main() setup.  Otherwise tex_fast stays 0 and the SDRAM path
+ * (CPU-address tex_addr) is used, exactly as on a core without fast memory. */
 static of_texture_t cube_th, hud_th;
 static int          tex_fast;
 
+/* HUD colours (RGB565), derived from the brick palette plate/text entries. */
+static uint16_t hud_plate, hud_text_col;
+
 /* Active video mode (runtime). */
-static int   vw = 320, vh = 240, fb_stride = 320, hires = 0;
-static float cx = 160.0f, cy = 120.0f, focal = 300.0f, zi_k = 65536.0f / 300.0f;
+static int   vw = 320, vh = 240, fb_stride = 320 * FB_BPP, hires = 0;
+static float cx = 160.0f, cy = 120.0f, focal = 300.0f;
 
 static int  has_zbuffer;
 static int  grid_side = 4;       /* N x N cubes */
@@ -99,55 +117,18 @@ static inline int clamp_int(int v, int lo, int hi)
 }
 
 /* ================================================================
- * Assets — palette (from the photo), palookup colormap, texture
+ * Assets — RGB565 brick texture (no palette / colormap: truecolour)
  * ================================================================ */
-
-static void load_palette(void)
-{
-    for (int i = 0; i < 256; ++i) {
-        pal_rgb[i] = brick_pal[i];
-        of_video_palette((uint8_t)i, brick_pal[i]);
-    }
-}
-
-static int nearest_pal(int r, int g, int b, int lo, int hi)
-{
-    int best = lo, bestd = 0x7fffffff;
-    for (int i = lo; i <= hi; ++i) {
-        int pr = (int)((pal_rgb[i] >> 16) & 255);
-        int pg = (int)((pal_rgb[i] >> 8) & 255);
-        int pb = (int)(pal_rgb[i] & 255);
-        int dr = pr - r, dg = pg - g, db = pb - b;
-        int d = dr * dr + dg * dg + db * db;
-        if (d < bestd) { bestd = d; best = i; }
-    }
-    return best;
-}
-
-/* palookup row r: 0 = brightest, 63 = darkest.  Built by darkening each palette
- * color in RGB and snapping to the nearest image color — works for any palette. */
-static void build_colormap(void)
-{
-    for (int row = 0; row < CMAP_ROWS; ++row) {
-        float s = (float)(63 - row) / 63.0f;
-        if (s < 0.06f) s = 0.06f;
-        for (int c = 0; c < 256; ++c) {
-            int r = (int)(((pal_rgb[c] >> 16) & 255) * s);
-            int g = (int)(((pal_rgb[c] >> 8) & 255) * s);
-            int b = (int)((pal_rgb[c] & 255) * s);
-            colormap[row * 256 + c] = (uint8_t)nearest_pal(r, g, b, 0, PAL_IMAGE_HI);
-        }
-    }
-}
 
 static void load_texture(void)
 {
-    memcpy(cube_tex, brick_pix, TEX_W * TEX_H);
-    of_cache_flush_range(cube_tex, TEX_W * TEX_H);
+    for (int i = 0; i < TEX_W * TEX_H; ++i)
+        cube_tex[i] = rgb565_888(brick_pal[brick_pix[i]]);
+    of_cache_flush_range(cube_tex, TEX_W * TEX_H * FB_BPP);
 }
 
 /* ================================================================
- * GPU-composited HUD
+ * GPU-composited HUD (RGB565 texture, drawn as a screen-space quad)
  * ================================================================ */
 
 static uint16_t glyph_bits(char ch)
@@ -168,7 +149,7 @@ static uint16_t glyph_bits(char ch)
     }
 }
 
-static void hud_text(int x, int y, const char *s, uint8_t color)
+static void hud_text(int x, int y, const char *s, uint16_t color)
 {
     for (const char *p = s; *p; ++p, x += 4) {
         uint16_t bits = glyph_bits(*p);
@@ -184,9 +165,10 @@ static void hud_update(const char *l1, const char *l2)
 {
     if (!strcmp(l1, hud_l1) && !strcmp(l2, hud_l2))
         return;
-    memset(hud_tex, PAL_HUD_PLATE, HUD_W * HUD_H);
-    hud_text(2, 1, l1, PAL_HUD_TEXT);
-    hud_text(2, 9, l2, PAL_HUD_TEXT);
+    for (int i = 0; i < HUD_W * HUD_H; ++i)
+        hud_tex[i] = hud_plate;
+    hud_text(2, 1, l1, hud_text_col);
+    hud_text(2, 9, l2, hud_text_col);
     if (tex_fast) {
         /* The HUD lives in the fast tier; re-upload in place so the domain
          * never has to flip to SDRAM.  Drain first — this only runs when the
@@ -194,9 +176,10 @@ static void hud_update(const char *l1, const char *l2)
          * and it stops us clobbering a frame still fetching the old HUD. */
         of_gpu_finish();
         _of_gpu_fast_tex_upload(of_texture_gpu_addr(&hud_th),
-                                (const uint32_t *)hud_tex, (HUD_W * HUD_H + 3) >> 2);
+                                (const uint32_t *)hud_tex,
+                                (HUD_W * HUD_H * FB_BPP + 3) >> 2);
     } else {
-        of_cache_flush_range(hud_tex, HUD_W * HUD_H);
+        of_cache_flush_range(hud_tex, HUD_W * HUD_H * FB_BPP);
     }
     snprintf(hud_l1, sizeof(hud_l1), "%s", l1);
     snprintf(hud_l2, sizeof(hud_l2), "%s", l2);
@@ -209,7 +192,6 @@ static void hud_update(const char *l1, const char *l2)
 typedef struct { float x, y, z; } vec3;
 
 static inline vec3 vadd(vec3 a, vec3 b) { return (vec3){ a.x+b.x, a.y+b.y, a.z+b.z }; }
-static inline vec3 vsub(vec3 a, vec3 b) { return (vec3){ a.x-b.x, a.y-b.y, a.z-b.z }; }
 static inline vec3 vneg(vec3 a)         { return (vec3){ -a.x, -a.y, -a.z }; }
 static inline float vdot(vec3 a, vec3 b){ return a.x*b.x + a.y*b.y + a.z*b.z; }
 
@@ -232,7 +214,7 @@ static void rot_y(float a, float m[9])
     m[0]=c; m[1]=0; m[2]=s;  m[3]=0; m[4]=1; m[5]=0;  m[6]=-s; m[7]=0; m[8]=c;
 }
 
-/* Unit cube: 8 corners, 6 faces (CCW from outside) with model normals. */
+/* Unit cube: 8 corners, 6 faces (CCW from outside) with model-space normals. */
 static const float cube_v[8][3] = {
     {-1,-1,-1},{1,-1,-1},{1,1,-1},{-1,1,-1},
     {-1,-1,1},{1,-1,1},{1,1,1},{-1,1,1},
@@ -240,82 +222,83 @@ static const float cube_v[8][3] = {
 static const int   cube_idx[6][4] = {
     {0,1,2,3},{5,4,7,6},{4,0,3,7},{1,5,6,2},{3,2,6,7},{4,5,1,0},
 };
+/* Object-space face normals (front -z, back +z, left -x, right +x, top +y,
+ * bottom -y) — handed to the GPU per vertex; it does the N.L itself. */
+static const float MN[6][3] = {
+    {0,0,-1},{0,0,1},{-1,0,0},{1,0,0},{0,1,0},{0,-1,0},
+};
 /* Per-face texel UVs, precomputed Q16.16 (constant — never recomputed). */
 static const int32_t UVF[4][2] = {
     {0, 0}, {TEX_W << 16, 0}, {TEX_W << 16, TEX_H << 16}, {0, TEX_H << 16},
 };
 
 static const vec3 LIGHT_DIR = { -0.40f, 0.55f, -0.73f };
+/* Directional light colour and ambient floor (RGB565).  texel*(ambient+N.L*lit)
+ * is the final fragment, so a bright light + dim ambient lights faces toward
+ * LIGHT_DIR and darkens those facing away. */
+#define LIGHT_RGB565   0xFFFF                 /* white directional */
+#define AMBIENT_RGB565 0x4208                 /* ~rgb(64,64,64) floor */
+
+/* Per-triangle perspective-scale targets (match SM64's gfx_gpu.c ZI_*).  The HW
+ * vert-tri derive forms s*zi and zi in a Q16.16 window that starves on small
+ * 1/w; scale zi so the largest of {1/w, u/w, v/w} lands near ZI_DERIVE_TARGET.
+ * The scale CANCELS in (s*zi)/zi, so it is free to vary per triangle; depth is
+ * decoupled (1/w * 2^30, GPU reads sp_depth_value not zi) so this never touches
+ * the z-buffer.  ZI_SCALE is the degenerate (zero-magnitude) fallback. */
+#define ZI_DERIVE_TARGET 8192.0f
+#define ZI_SCALE         64.0f
+
+/* Flat face shade -> RGB565 (the per-vertex colour the GPU modulates the texel
+ * by: fragment = texel * shade).  Replaces the GPU light-state's N.L: per RGB565
+ * channel, shade = ambient + clamp01(N.L) * light, exactly as the old hardware
+ * GPU_CMD_SET_LIGHT_STATE computed it, so the lit cubes look identical. */
+static inline uint16_t flat_shade565(float ndotl)
+{
+    if (ndotl < 0.0f)      ndotl = 0.0f;
+    else if (ndotl > 1.0f) ndotl = 1.0f;
+    int lr = (LIGHT_RGB565   >> 11) & 0x1F, lg = (LIGHT_RGB565   >> 5) & 0x3F, lb = LIGHT_RGB565   & 0x1F;
+    int ar = (AMBIENT_RGB565 >> 11) & 0x1F, ag = (AMBIENT_RGB565 >> 5) & 0x3F, ab = AMBIENT_RGB565 & 0x1F;
+    int r = ar + (int)lrintf(ndotl * (float)lr);
+    int g = ag + (int)lrintf(ndotl * (float)lg);
+    int b = ab + (int)lrintf(ndotl * (float)lb);
+    if (r > 31) r = 31;
+    if (g > 63) g = 63;
+    if (b > 31) b = 31;
+    return (uint16_t)((r << 11) | (g << 5) | b);
+}
 
 /* ================================================================
- * Per-vertex pack + triangle emit
+ * Per-frame shared geometry
  * ================================================================ */
 
-typedef struct {
-    int16_t x, y;        /* Q12.4 subpixel X, integer scanline Y */
-    int32_t s, t;        /* Q16.16 RAW texel coords */
-    int32_t zi;          /* Q16.16 of 1/z */
-    uint8_t light;       /* palookup row 0..63 */
-} tvert_t;
-
-/* One divide (focal/z), reused for x, y and zi (= inv * 65536/focal). */
-static inline tvert_t project(vec3 v, int32_t s, int32_t t, uint8_t light)
-{
-    float inv = focal / v.z;
-    tvert_t o;
-    o.x = (int16_t)lrintf((cx + v.x * inv) * 16.0f);
-    o.y = (int16_t)lrintf(cy - v.y * inv);
-    o.s = s; o.t = t;
-    o.zi = (int32_t)lrintf(inv * zi_k);
-    o.light = light;
-    return o;
-}
-
-static void emit_tri(const tvert_t *a, const tvert_t *b, const tvert_t *c)
-{
-    int16_t x[3]  = { a->x, b->x, c->x };
-    int16_t y[3]  = { a->y, b->y, c->y };
-    int32_t s[3]  = { a->s, b->s, c->s };
-    int32_t t[3]  = { a->t, b->t, c->t };
-    int32_t zi[3] = { a->zi, b->zi, c->zi };
-    uint8_t l[3]  = { a->light, b->light, c->light };
-    of_gpu_draw_vert_tri(x, y, s, t, zi, l);
-}
-
-/* Per-frame shared geometry: the rotation is identical for every cube, so the
- * eight corner offsets, six face normals and six face light rows are computed
- * ONCE here.  rvc0/rvc2 are the view-rotation columns used to place each cube's
- * centre (grid is on the XZ plane, y = 0). */
+/* The model->camera rotation is identical for every cube, so it (m) and the
+ * object-space light direction (lobj) are computed ONCE per frame.  vn holds the
+ * six camera-space face normals for back-face culling; rvc0/rvc2 are the
+ * view-rotation columns used to place each cube's centre (grid on XZ, y = 0). */
 static void build_geom(float spin_y, float spin_x, float orbit,
-                       vec3 voff[8], vec3 vn[6], uint8_t flit[6],
+                       float m[9], vec3 vn[6], vec3 *lobj,
                        vec3 *rvc0, vec3 *rvc2)
 {
-    float rs[9], rv[9], m[9], ta[9], tb[9];
+    float rs[9], rv[9], ta[9], tb[9];
     rot_y(spin_y, ta); rot_x(spin_x, tb); mat_mul(ta, tb, rs);     /* R_spin */
     rot_x(SCENE_PITCH, ta); rot_y(orbit, tb); mat_mul(ta, tb, rv); /* R_view */
     mat_mul(rv, rs, m);                                            /* M = Rv*Rs */
 
-    vec3 c0 = { m[0], m[3], m[6] };       /* columns of M */
+    vec3 c0 = { m[0], m[3], m[6] };       /* columns of M (camera-space axes) */
     vec3 c1 = { m[1], m[4], m[7] };
     vec3 c2 = { m[2], m[5], m[8] };
-    vec3 hx = { c0.x*HALF, c0.y*HALF, c0.z*HALF };
-    vec3 hy = { c1.x*HALF, c1.y*HALF, c1.z*HALF };
-    vec3 hz = { c2.x*HALF, c2.y*HALF, c2.z*HALF };
-    for (int i = 0; i < 8; ++i) {
-        vec3 o = (cube_v[i][0] > 0) ? hx : vneg(hx);
-        o = (cube_v[i][1] > 0) ? vadd(o, hy) : vsub(o, hy);
-        o = (cube_v[i][2] > 0) ? vadd(o, hz) : vsub(o, hz);
-        voff[i] = o;
-    }
     vn[0] = vneg(c2); vn[1] = c2;     /* front(-z) / back(+z)  */
     vn[2] = vneg(c0); vn[3] = c0;     /* left(-x)  / right(+x) */
     vn[4] = c1;       vn[5] = vneg(c1);/* top(+y)   / bottom(-y)*/
-    for (int f = 0; f < 6; ++f) {
-        float d = vdot(vn[f], LIGHT_DIR);
-        if (d < 0.0f) d = 0.0f;
-        float inten = 0.30f + 0.70f * d;
-        flit[f] = (uint8_t)clamp_int((int)((1.0f - inten) * 48.0f), 0, 56);
-    }
+
+    /* Light into object space: lobj = R_spin^T * LIGHT_DIR (normals are
+     * object-space, so the light must be too — the GPU does not rotate them). */
+    float ln = sqrtf(vdot(LIGHT_DIR, LIGHT_DIR));
+    vec3 L = { LIGHT_DIR.x / ln, LIGHT_DIR.y / ln, LIGHT_DIR.z / ln };
+    lobj->x = rs[0]*L.x + rs[3]*L.y + rs[6]*L.z;
+    lobj->y = rs[1]*L.x + rs[4]*L.y + rs[7]*L.z;
+    lobj->z = rs[2]*L.x + rs[5]*L.y + rs[8]*L.z;
+
     *rvc0 = (vec3){ rv[0], rv[3], rv[6] };
     *rvc2 = (vec3){ rv[2], rv[5], rv[8] };
 }
@@ -324,19 +307,21 @@ static void build_geom(float spin_y, float spin_x, float orbit,
  * Scene
  * ================================================================ */
 
+/* Sticky surface state (0x4A) shared by the lit-vertex draws: truecolour
+ * RGB565 framebuffer + brick texture + z-buffer + clip rect. */
 static void bind_cube_surface(uint32_t fb_addr)
 {
     of_gpu_tri_state_t st;
     memset(&st, 0, sizeof(st));
     st.fb_base       = fb_addr;
-    st.fb_major_step = fb_stride;
-    st.fb_minor_step = 1;
+    st.fb_major_step = fb_stride;          /* bytes per row */
+    st.fb_minor_step = FB_BPP;             /* RGB565 -> 2 bytes per pixel */
     st.tex_addr      = tex_fast ? of_texture_gpu_addr(&cube_th)
                                 : (uint32_t)(uintptr_t)cube_tex;
     st.tex_width     = TEX_W;
     st.tex_w_mask    = TEX_W - 1;
     st.tex_h_mask    = TEX_H - 1;
-    st.flags         = OF_GPU_SPAN_COLORMAP;
+    st.flags         = OF_GPU_SPAN_TRUECOLOR;   /* RGB565 direct-colour */
     st.colormap_id   = 0;
     st.clip_x0 = 0;  st.clip_x1 = (int16_t)vw;
     st.clip_y0 = 0;  st.clip_y1 = (int16_t)vh;
@@ -351,49 +336,58 @@ static void bind_cube_surface(uint32_t fb_addr)
     of_gpu_set_tri_state(&st);
 }
 
+/* Screen-space textured quad for the HUD (truecolour, no z, full-bright vertex
+ * colour so the fragment is just the HUD texel). */
 static void emit_hud_quad(uint32_t fb_addr)
 {
     of_gpu_tri_state_t st;
     memset(&st, 0, sizeof(st));
     st.fb_base       = fb_addr;
     st.fb_major_step = fb_stride;
-    st.fb_minor_step = 1;
+    st.fb_minor_step = FB_BPP;
     st.tex_addr      = tex_fast ? of_texture_gpu_addr(&hud_th)
                                 : (uint32_t)(uintptr_t)hud_tex;
     st.tex_width     = HUD_W;
     st.tex_w_mask    = HUD_W - 1;
     st.tex_h_mask    = HUD_H - 1;
-    st.flags         = 0;
+    st.flags         = OF_GPU_SPAN_TRUECOLOR;
     st.z_mode        = OF_GPU_PARAM_Z_NONE;
     st.clip_x0 = 0;  st.clip_x1 = (int16_t)vw;
     st.clip_y0 = 0;  st.clip_y1 = (int16_t)vh;
     of_gpu_set_tri_state(&st);
 
     const int x0 = HUD_X, y0 = HUD_Y, x1 = HUD_X + HUD_W, y1 = HUD_Y + HUD_H;
-    const int32_t zi = 1 << 16;
-    tvert_t q[4] = {
-        { (int16_t)(x0 * 16), (int16_t)y0, 0,           0,           zi, 0 },
-        { (int16_t)(x1 * 16), (int16_t)y0, HUD_W << 16, 0,           zi, 0 },
-        { (int16_t)(x1 * 16), (int16_t)y1, HUD_W << 16, HUD_H << 16, zi, 0 },
-        { (int16_t)(x0 * 16), (int16_t)y1, 0,           HUD_H << 16, zi, 0 },
-    };
-    emit_tri(&q[0], &q[1], &q[2]);
-    emit_tri(&q[0], &q[2], &q[3]);
+    const int16_t X0 = (int16_t)(x0 * 16), X1 = (int16_t)(x1 * 16);  /* Q12.4 */
+    const int32_t zc = 1 << 16;
+    const uint16_t white[3] = { 0xFFFF, 0xFFFF, 0xFFFF };
+    const int32_t  zi[3]    = { zc, zc, zc };
+    const int32_t  depth[3] = { zc, zc, zc };
+
+    /* tri 0: (x0,y0)(x1,y0)(x1,y1) ; tri 1: (x0,y0)(x1,y1)(x0,y1) */
+    int16_t xa[3] = { X0, X1, X1 }, ya[3] = { (int16_t)y0, (int16_t)y0, (int16_t)y1 };
+    int32_t sa[3] = { 0, HUD_W << 16, HUD_W << 16 };
+    int32_t ta[3] = { 0, 0, HUD_H << 16 };
+    of_gpu_draw_vert_tri_rgb(xa, ya, sa, ta, zi, white, 0, depth, NULL);
+
+    int16_t xb[3] = { X0, X1, X0 }, yb[3] = { (int16_t)y0, (int16_t)y1, (int16_t)y1 };
+    int32_t sb[3] = { 0, HUD_W << 16, 0 };
+    int32_t tb[3] = { 0, HUD_H << 16, HUD_H << 16 };
+    of_gpu_draw_vert_tri_rgb(xb, yb, sb, tb, zi, white, 0, depth, NULL);
 }
 
 static int build_frame(uint32_t fb_addr, float orbit, float spin)
 {
-    of_gpu_clear_rect_strided(fb_addr, (uint16_t)vw, (uint16_t)vh,
-                              (uint16_t)fb_stride, PAL_BG);
+    of_gpu_clear_rect_strided(fb_addr, (uint16_t)(vw * FB_BPP), (uint16_t)vh,
+                              (uint16_t)fb_stride, 0x00);   /* black */
     if (has_zbuffer)
         of_gpu_clear_rect_strided((uint32_t)(uintptr_t)zbuf,
                                   (uint16_t)(vw * ZBUF_ELEM), (uint16_t)vh,
                                   (uint16_t)(vw * ZBUF_ELEM), 0);
     bind_cube_surface(fb_addr);
 
-    vec3 voff[8], vn[6], rvc0, rvc2;
-    uint8_t flit[6];
-    build_geom(spin * 0.9f, spin * 0.6f, orbit, voff, vn, flit, &rvc0, &rvc2);
+    float m[9];
+    vec3 vn[6], lobj, rvc0, rvc2;
+    build_geom(spin * 0.9f, spin * 0.6f, orbit, m, vn, &lobj, &rvc0, &rvc2);
 
     float half     = (grid_side - 1) * 0.5f * SPACING;
     float cam_dist = CAM_NEAR + half * CAM_K;
@@ -402,12 +396,15 @@ static int build_frame(uint32_t fb_addr, float orbit, float spin)
     float cube_r   = HALF * 1.74f;                  /* bounding radius (margin)  */
     float near_z   = cube_r + 0.4f;                 /* keeps every vert in front */
 
+    /* The two-triangle split of a face quad (corners 0,1,2 and 0,2,3). */
+    static const int split[2][3] = { {0, 1, 2}, {0, 2, 3} };
+
     int tris = 0, drawn = 0;
     for (int j = 0; j < grid_side; ++j) {
         float gz = j * SPACING - half;
         for (int i = 0; i < grid_side; ++i) {
             float gx = i * SPACING - half;
-            /* cube centre in view space = R_view * (gx,0,gz) + (0,0,cam_dist) */
+            /* cube centre in camera space = R_view * (gx,0,gz) + (0,0,cam_dist) */
             vec3 c = { gx * rvc0.x + gz * rvc2.x,
                        gx * rvc0.y + gz * rvc2.y,
                        gx * rvc0.z + gz * rvc2.z + cam_dist };
@@ -420,16 +417,81 @@ static int build_frame(uint32_t fb_addr, float orbit, float spin)
 
             for (int f = 0; f < 6; ++f) {
                 if (vdot(vn[f], c) >= -HALF)                   continue; /* backface */
-                tvert_t pv[4];
+
+                /* Flat lit shade for this whole face: ambient + clamp01(N.L)*light.
+                 * Normals are object-space (MN[f]); lobj is the light rotated into
+                 * object space (build_geom) so the dot is the same N.L the old GPU
+                 * light state computed.  All six face vertices share it. */
+                float ndotl = MN[f][0] * lobj.x + MN[f][1] * lobj.y
+                            + MN[f][2] * lobj.z;
+                uint16_t shade = flat_shade565(ndotl);
+
+                /* Project the four face corners on the CPU: model->camera
+                 * (shared rotation scaled by HALF + this cube's centre), then
+                 * perspective.  Cache 1/w and the raw texel coords; zi/depth are
+                 * formed per triangle so each gets its own perspective scale. */
+                int16_t px[4], py[4];
+                int32_t ps[4], pt[4];
+                float   pwi[4], puf[4], pvf[4];
                 for (int k = 0; k < 4; ++k) {
-                    int vi = cube_idx[f][k];
-                    vec3 v = { c.x + voff[vi].x, c.y + voff[vi].y, c.z + voff[vi].z };
-                    int dr = clamp_int((int)((v.z - cam_dist + 6.0f) * 2.2f), 0, 12);
-                    pv[k] = project(v, UVF[k][0], UVF[k][1],
-                                    (uint8_t)clamp_int(flit[f] + dr, 0, 63));
+                    const float *mv = cube_v[cube_idx[f][k]];
+                    float camx = HALF * (m[0]*mv[0] + m[1]*mv[1] + m[2]*mv[2]) + c.x;
+                    float camy = HALF * (m[3]*mv[0] + m[4]*mv[1] + m[5]*mv[2]) + c.y;
+                    float camz = HALF * (m[6]*mv[0] + m[7]*mv[1] + m[8]*mv[2]) + c.z;
+                    float wi   = (camz > 0.0001f) ? 1.0f / camz : 0.0f;   /* 1/w */
+                    float sx   = cx + focal * camx * wi;
+                    float sy   = cy + focal * camy * wi;
+                    if (sx < -2047.0f) sx = -2047.0f; else if (sx > 2047.0f) sx = 2047.0f;
+                    if (sy < -2047.0f) sy = -2047.0f; else if (sy > 2047.0f) sy = 2047.0f;
+                    px[k]  = (int16_t)lrintf(sx * 16.0f);   /* Q12.4 subpixel X */
+                    py[k]  = (int16_t)lrintf(sy);           /* integer scanline (4A subpix_y=0) */
+                    ps[k]  = UVF[k][0];                     /* raw texel u, Q16.16 (GPU forms s*zi) */
+                    pt[k]  = UVF[k][1];                     /* raw texel v, Q16.16 */
+                    pwi[k] = wi;
+                    puf[k] = (float)UVF[k][0] * (1.0f / 65536.0f);  /* texel u in units */
+                    pvf[k] = (float)UVF[k][1] * (1.0f / 65536.0f);
                 }
-                emit_tri(&pv[0], &pv[1], &pv[2]);
-                emit_tri(&pv[0], &pv[2], &pv[3]);
+
+                /* Two triangles per face. */
+                for (int q = 0; q < 2; ++q) {
+                    int16_t  x[3], y[3];
+                    int32_t  s[3], t[3], zi[3], depth[3];
+                    uint16_t rgb[3];
+
+                    /* Per-triangle perspective scale: peak of {|1/w|,|u/w|,|v/w|}
+                     * over the 3 verts -> zscale lands it at ZI_DERIVE_TARGET. */
+                    float peak = 0.0f;
+                    for (int k = 0; k < 3; ++k) {
+                        int vi = split[q][k];
+                        float a3 = fabsf(pwi[vi]);
+                        float a4 = fabsf(puf[vi] * pwi[vi]);
+                        float a5 = fabsf(pvf[vi] * pwi[vi]);
+                        if (a3 > peak) peak = a3;
+                        if (a4 > peak) peak = a4;
+                        if (a5 > peak) peak = a5;
+                    }
+                    float zscale = (peak > 0.0f) ? (ZI_DERIVE_TARGET / peak) : ZI_SCALE;
+                    if (zscale < 1.0f) zscale = 1.0f;       /* never shrink below 1:1 */
+
+                    for (int k = 0; k < 3; ++k) {
+                        int vi = split[q][k];
+                        x[k] = px[vi];  y[k] = py[vi];
+                        s[k] = ps[vi];  t[k] = pt[vi];
+
+                        int z = (int)lrintf(pwi[vi] * (65536.0f * zscale));  /* (1/w)*K, Q16.16 */
+                        if (z < 1) z = 1;
+                        zi[k] = z;
+
+                        /* Decoupled high-precision depth: 1/w * 2^30. */
+                        float df = pwi[vi] * 1073741824.0f;
+                        if (df < 1.0f) df = 1.0f;
+                        else if (df > 2147483520.0f) df = 2147483520.0f;
+                        depth[k] = (int32_t)lrintf(df);
+
+                        rgb[k] = shade;                     /* flat: all verts share it */
+                    }
+                    of_gpu_draw_vert_tri_rgb(x, y, s, t, zi, rgb, 0u, depth, NULL);
+                }
                 tris += 2;
             }
             if ((++drawn & 7) == 0)
@@ -446,21 +508,23 @@ static int build_frame(uint32_t fb_addr, float orbit, float spin)
  * Bring-up + present loop
  * ================================================================ */
 
-static void no_vert_tri(const char *why)
+static void no_tl(const char *why)
 {
     of_video_set_display_mode(OF_DISPLAY_TERMINAL);
     printf("\033[2J\033[H");
-    printf("  triangles: this core has no hardware vertex-triangle path\n");
+    printf("  triangles: this core lacks the vert-tri raster path\n");
+    printf("  (CPU does the transform; the GPU just rasterises)\n");
     printf("  (%s)\n", why);
-    printf("  Needs OF_HW_GPU_VERT_TRI + PARAM_TRI + PERSP + PARAM_SPAN_LIST\n");
-    printf("  -- the Pocket OS30 / Quake2 GPU bitstream.\n");
+    printf("  Needs OF_HW_GPU_VERT_TRI + VCOLOR + PERSP\n");
+    printf("  -- the os30 GPU bitstream.\n");
     for (;;) { of_input_poll_p0(); usleep(16 * 1000); }
 }
 
 static int probe_gpu(int draw_idx)
 {
     uint32_t fb = (uint32_t)(uintptr_t)of_video_buffer_addr(draw_idx);
-    of_gpu_clear_rect_strided(fb, (uint16_t)vw, (uint16_t)vh, (uint16_t)fb_stride, PAL_BG);
+    of_gpu_clear_rect_strided(fb, (uint16_t)(vw * FB_BPP), (uint16_t)vh,
+                              (uint16_t)fb_stride, 0x00);
     uint32_t token = of_gpu_submit();
     uint32_t t0 = of_time_us();
     while (!of_gpu_fence_reached(token)) {
@@ -479,12 +543,25 @@ static void adopt_mode(void)
     of_video_mode_t cur;
     of_video_get_mode(&cur);
     vw = cur.width; vh = cur.height;
-    fb_stride = cur.stride ? cur.stride : cur.width;
+    fb_stride = cur.stride ? cur.stride : (cur.width * FB_BPP);
     focal = (float)vh * 1.25f;
     cx = (float)vw * 0.5f;
     cy = (float)vh * 0.5f;
-    zi_k = 65536.0f / focal;
     hires = (vw >= 640);
+}
+
+/* Request an RGB565 mode of the given size.  Returns 0 on failure. */
+static int set_rgb565_mode(int want_hires)
+{
+    of_video_mode_t want, norm;
+    memset(&want, 0, sizeof want);
+    want.width      = want_hires ? 640 : 320;
+    want.height     = want_hires ? 480 : 240;
+    want.color_mode = OF_VIDEO_MODE_RGB565;
+    if (of_video_check_mode(&want, &norm) != 0 || of_video_set_mode(&norm) != 0)
+        return 0;
+    adopt_mode();
+    return 1;
 }
 
 /* d-pad LEFT/RIGHT select a resolution directly.  Returns 1 if it changed
@@ -493,16 +570,11 @@ static int set_resolution(int want_hires)
 {
     if (want_hires == hires)
         return 0;
-    of_video_mode_t want, norm;
-    memset(&want, 0, sizeof want);
-    want.width      = want_hires ? 640 : 320;
-    want.height     = want_hires ? 480 : 240;
-    want.color_mode = OF_VIDEO_MODE_8BIT;
-    if (of_video_check_mode(&want, &norm) != 0 || of_video_set_mode(&norm) != 0) {
-        printf("[triangles] %dx%d not available on this core\n", want.width, want.height);
+    if (!set_rgb565_mode(want_hires)) {
+        printf("[triangles] %dx%d RGB565 not available on this core\n",
+               want_hires ? 640 : 320, want_hires ? 480 : 240);
         return 0;
     }
-    adopt_mode();
     of_video_set_display_mode(OF_DISPLAY_FRAMEBUFFER);
     printf("[triangles] resolution -> %dx%d\n", vw, vh);
     return 1;
@@ -512,67 +584,67 @@ int main(int argc, char **argv)
 {
     (void)argc; (void)argv;
 
-    cube_tex = malloc(TEX_W * TEX_H);
-    hud_tex  = malloc(HUD_W * HUD_H);
+    cube_tex = malloc((size_t)TEX_W * TEX_H * FB_BPP);
+    hud_tex  = malloc((size_t)HUD_W * HUD_H * FB_BPP);
     zbuf     = malloc((size_t)MAX_W * MAX_H * ZBUF_ELEM);
     if (!cube_tex || !hud_tex || !zbuf) {
         printf("[triangles] allocation failed\n");
         return 1;
     }
 
-    load_palette();
-    build_colormap();
+    hud_plate    = rgb565_888(brick_pal[PAL_HUD_PLATE]);
+    hud_text_col = rgb565_888(brick_pal[PAL_HUD_TEXT]);
     load_texture();
     of_cache_flush_range(zbuf, (uint32_t)((size_t)MAX_W * MAX_H * ZBUF_ELEM));
 
     const struct of_capabilities *caps = of_get_caps();
     if (!(caps->hw_features & OF_HW_GPU_SPAN) || caps->gpu_base == 0)
-        no_vert_tri("no GPU span unit / gpu_base");
+        no_tl("no GPU span unit / gpu_base");
 
     of_gpu_init();
 
-    const uint32_t need = OF_HW_GPU_VERT_TRI | OF_HW_GPU_PARAM_TRI |
-                          OF_HW_GPU_PERSP   | OF_HW_GPU_PARAM_SPAN_LIST;
+    /* CPU geometry feeds the os30 vert-tri raster: needs the raster + truecolour
+     * + perspective, but NOT the XFORM front-end (os30 omits INCLUDE_XFORM). */
+    const uint32_t need = OF_HW_GPU_VERT_TRI | OF_HW_GPU_VCOLOR | OF_HW_GPU_PERSP;
     if ((caps->hw_features & need) != need) {
         char buf[96];
-        snprintf(buf, sizeof(buf), "VERT_TRI=%d PARAM_TRI=%d PERSP=%d SPAN_LIST=%d",
-                 of_has_feature(OF_HW_GPU_VERT_TRI), of_has_feature(OF_HW_GPU_PARAM_TRI),
-                 of_has_feature(OF_HW_GPU_PERSP), of_has_feature(OF_HW_GPU_PARAM_SPAN_LIST));
-        no_vert_tri(buf);
+        snprintf(buf, sizeof(buf), "VERT_TRI=%d VCOLOR=%d PERSP=%d",
+                 of_has_feature(OF_HW_GPU_VERT_TRI),
+                 of_has_feature(OF_HW_GPU_VCOLOR), of_has_feature(OF_HW_GPU_PERSP));
+        no_tl(buf);
     }
     has_zbuffer = of_has_feature(OF_HW_GPU_PARAM_SPAN_ZTEST);
 
-    adopt_mode();
+    if (!set_rgb565_mode(0))
+        no_tl("RGB565 truecolour mode not available");
+
     int draw_idx = of_video_acquire_next(-1, 0);
     if (!probe_gpu(draw_idx))
-        no_vert_tri("GPU fence never retired (OS/bitstream issue, not the demo)");
+        no_tl("GPU fence never retired (OS/bitstream issue, not the demo)");
 
     /* Texture residence (after the GPU is verified — of_texture_bind drains).
-     * os30 has a dedicated fast-texture tier.  Use it for the colormap AND both
-     * textures so the GPU's fetch domain never flips mid-frame (a flip calls
+     * os30 has a dedicated fast-texture tier.  Use it for both RGB565 textures
+     * so the GPU's fetch domain never flips mid-frame (a flip calls
      * of_gpu_finish(), which would break the CPU/GPU overlap).  Only take the
      * fast path if it ALL fits in one domain; otherwise fall back to the SDRAM
-     * path (CPU-address tex_addr + palookup slot) used on cores without it. */
+     * path used on cores without it. */
     of_texture_init();
     {
-        uint32_t fast_need = (uint32_t)sizeof(colormap)
-                           + TEX_W * TEX_H + HUD_W * HUD_H + 64u;
+        uint32_t fast_need = (uint32_t)(TEX_W * TEX_H * FB_BPP)
+                           + (uint32_t)(HUD_W * HUD_H * FB_BPP) + 64u;
         tex_fast = of_texture_has_fast_mem() &&
                    of_texture_budget_free() >= fast_need;
     }
     if (tex_fast) {
-        memset(hud_tex, PAL_HUD_PLATE, HUD_W * HUD_H);    /* sane initial HUD */
-        of_texture_set_colormap(colormap, sizeof(colormap));      /* fast + SDRAM */
-        of_texture_create(&cube_th, cube_tex, TEX_W, TEX_H, TEX_W * TEX_H);
-        of_texture_create(&hud_th,  hud_tex,  HUD_W, HUD_H, HUD_W * HUD_H);
+        for (int i = 0; i < HUD_W * HUD_H; ++i) hud_tex[i] = hud_plate;
+        of_texture_create(&cube_th, cube_tex, TEX_W, TEX_H, TEX_W * TEX_H * FB_BPP);
+        of_texture_create(&hud_th,  hud_tex,  HUD_W, HUD_H, HUD_W * HUD_H * FB_BPP);
         of_texture_bind(&cube_th);    /* route the fetch domain → fast (it stays) */
-    } else {
-        of_gpu_palookup_upload(0, colormap, sizeof(colormap));
     }
 
     of_video_set_display_mode(OF_DISPLAY_FRAMEBUFFER);
 
-    printf("[triangles] ready (HW vert-tri, %dx%d, z-buffer=%s, fast-tex=%s)\n",
+    printf("[triangles] ready (CPU geom + HW vert-tri, %dx%d, z-buffer=%s, fast-tex=%s)\n",
            vw, vh, has_zbuffer ? "on" : "off", tex_fast ? "on" : "off");
 
     float orbit = 0.5f, spin = 0.0f;

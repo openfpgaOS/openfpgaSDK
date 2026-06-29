@@ -49,7 +49,6 @@ def ensure_instance(path):
              {"id": 3, "filename": f"{APP}.elf"}]
     slots += [{"id": i, "filename": f"s{i}.bin"} for i in TEST_IDS]
     inst = {"instance": {"magic": "APF_VER_1",
-                         "variant_select": {"id": 666, "select": False},
                          "data_slots": slots}}
     open(path, "w").write(json.dumps(inst, indent=4) + "\n")
 

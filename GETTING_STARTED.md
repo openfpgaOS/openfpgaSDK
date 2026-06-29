@@ -130,21 +130,22 @@ This is the only config file you edit. It maps your app's files to data slots:
 {
     "instance": {
         "magic": "APF_VER_1",
-        "variant_select": { "id": 666, "select": false },
         "data_slots": [
             { "id": 1, "filename": "os.bin" },
-            { "id": 2, "filename": "mygame.elf" },
+            { "id": 2, "filename": "mygame.ini" },
+            { "id": 3, "filename": "mygame.elf" },
             { "id": 10, "filename": "mygame.sav" }
         ]
     }
 }
 ```
 
-To add data files (up to 4), add entries for slots 3-6:
+To add data files (up to 3), add entries for slots 4-6 (slot 2 is the app
+`.ini`, slot 3 is your ELF):
 
 ```json
-{ "id": 3, "filename": "music.mod" },
-{ "id": 4, "filename": "sprites.dat" }
+{ "id": 4, "filename": "music.mod" },
+{ "id": 5, "filename": "sprites.dat" }
 ```
 
 Place the data files in your app directory alongside `main.c`. They get copied to the SD card automatically.

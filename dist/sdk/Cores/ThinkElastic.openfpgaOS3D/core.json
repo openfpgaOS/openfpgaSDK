@@ -5,8 +5,8 @@
             "platform_ids": [
                 "openfpgaos"
             ],
-            "shortname": "openfpgaOS",
-            "description": "openfpgaOS on VexiiRiscv RISC-V CPU",
+            "shortname": "openfpgaOS 3D",
+            "description": "openfpgaOS 3D / hardware-triangle demos",
             "author": "ThinkElastic",
             "url": "",
             "version": "0.7",
@@ -27,9 +27,9 @@
         },
         "cores": [
             {
-                "name": "os25",
+                "name": "os30",
                 "id": 0,
-                "filename": "os25.rbf_r",
+                "filename": "os30.rbf_r",
                 "chip32_vm": "loader.bin"
             }
         ]

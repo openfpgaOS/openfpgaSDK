@@ -617,11 +617,11 @@ Each app has an `instance.json` that maps filenames to data slots. This is the o
 {
     "instance": {
         "magic": "APF_VER_1",
-        "variant_select": { "id": 666, "select": false },
         "data_slots": [
             { "id": 1, "filename": "os.bin" },
-            { "id": 2, "filename": "mygame.elf" },
-            { "id": 3, "filename": "music.mod" },
+            { "id": 2, "filename": "mygame.ini" },
+            { "id": 3, "filename": "mygame.elf" },
+            { "id": 4, "filename": "music.mod" },
             { "id": 10, "filename": "mygame.sav" }
         ]
     }
@@ -636,8 +636,9 @@ When there's only one instance JSON for your app, the Pocket auto-selects it —
 |---------|------|---------|
 | 0 | Game | Instance selector (SDK-owned in data.json) |
 | 1 | OS Binary | `os.bin` — loaded by bootloader via DMA |
-| 2 | Application | Your app ELF — loaded by OS kernel |
-| 3-6 | Data 1-4 | App data files (WAD, GRP, images, audio, etc.) |
+| 2 | OS Config | `<app>.ini` — app config; the chip32 loader scans it for `VARIANT=os30` to pick the bitstream, then the OS parses it |
+| 3 | Application | Your app ELF — loaded by OS kernel |
+| 4-6 | Data 1-3 | App data files (WAD, GRP, images, audio, etc.) |
 | 7 | Sound Bank | Optional `.ofsf` SoundFont bank for MIDI |
 | 8 | Shared Config | SDK/system-owned nonvolatile config, 256 KB |
 | 10-19 | Save 0-9 | Nonvolatile CRAM0 save slots (256 KB each) |
@@ -851,6 +852,16 @@ the FPGA is configured, the chip32 loader reads the app's `.ini` and loads
 variant explicitly (`VARIANT=os25` is the default if the line is absent).
 
 > All 22 bundled demos carry a `VARIANT=` line; only `triangles` is `os30`.
+
+> ⚠️ **Dev-loop caveat (`make debug`).** Variant selection happens only on the
+> normal SD-card instance load, where the Pocket runs the chip32 loader *before*
+> configuring the FPGA. The `make debug` / DevKey loop instead JTAG-reloads a
+> fixed `ap_core.sof` (`quartus_pgm`) and hot-pushes your ELF onto the already
+> running bitstream — a JTAG reconfigure **skips the chip32 `core` instruction**,
+> so it always stays on whatever `ap_core.sof` was built (os25 by default),
+> regardless of `VARIANT=os30`. To exercise an os30 app over UART, JTAG-load an
+> os30 `.sof` yourself (`quartus_pgm -m jtag -o "p;os30_core.sof"`); to verify
+> the variant *switch*, deploy to the SD card and launch the instance normally.
 
 <details><summary>How it works under the hood</summary>
 
