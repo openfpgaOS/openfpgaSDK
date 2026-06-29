@@ -23,14 +23,19 @@
             "hardware": {
                 "link_port": true,
                 "cartridge_adapter": 0
-            }
+            },
+            "chip32_vm": "loader.bin"
         },
         "cores": [
             {
                 "name": "os25",
                 "id": 0,
-                "filename": "os25.rbf_r",
-                "chip32_vm": "loader.bin"
+                "filename": "os25.rbf_r"
+            },
+            {
+                "name": "os30",
+                "id": 1,
+                "filename": "os30.rbf_r"
             }
         ]
     }

@@ -54,17 +54,16 @@ release:
 	@rm -rf $(BUILD)
 	@mkdir -p $(SDK_ROOT)/build/pocket
 	@cp -r $(DIST)/ $(BUILD)/
-	@# Runtime binaries (pocket-specific → runtime/pocket/).  Each core pins ONE
-	@# bitstream: chip32 runtime core-switching does NOT take effect on the Pocket,
-	@# so a core only ever loads its default/first cores[] entry.  Give every core
-	@# dir exactly the bitstream(s) its own core.json names (the os25 demo core →
-	@# os25.rbf_r, the os30/3D core → os30.rbf_r) plus the shared `core 0` loader VM.
-	@for core in $(BUILD)/Cores/*/; do \
-		for rbf in $$(grep -o '"[^"]*\.rbf_r"' "$$core/core.json" | tr -d '"' | sort -u); do \
-			cp $(RUNTIME_POCKET)/$$rbf "$$core/" || exit 1; \
-		done; \
-		cp $(RUNTIME_POCKET)/loader.bin "$$core/"; \
+	@# Runtime binaries (pocket-specific → runtime/pocket/).  Copy EVERY
+	@# variant bitstream the demo core's core.json names (os25.rbf_r + os30.rbf_r)
+	@# plus the loader VM.  The bitstream is chosen per-instance at load time:
+	@# before configuring the FPGA, the chip32 loader.bin opens the app's .ini
+	@# (OS Config, data slot id 2), reads it into chip32 RAM and scans for the
+	@# "=os30" marker -> runs `core 1` (os30) when found, else `core 0` (os25).
+	@for rbf in $$(grep -o '"[^"]*\.rbf_r"' $(BUILD)/Cores/$(CORE_ID)/core.json | tr -d '"' | sort -u); do \
+		cp $(RUNTIME_POCKET)/$$rbf $(BUILD)/Cores/$(CORE_ID)/ || exit 1; \
 	done
+	@cp $(RUNTIME_POCKET)/loader.bin $(BUILD)/Cores/$(CORE_ID)/
 	@mkdir -p $(BUILD)/Assets/$(PLATFORM)/common
 	@cp $(RUNTIME_POCKET)/os.bin $(BUILD)/Assets/$(PLATFORM)/common/
 	@# Sound bank (SC-55 GM, target-agnostic → runtime/)
