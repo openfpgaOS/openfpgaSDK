@@ -1,0 +1,14 @@
+--- a/src/quake/engine/draw.c
++++ b/src/quake/engine/draw.c
+@@ -208,6 +208,11 @@
+ */
+ void Draw_Character (int x, int y, int num)
+ {
++	/* qsim validation build (noise/patches/uninit.patch): read never-initialized
++	 * memory -- deep in the app stack, below every frame the engine pushes.
++	 * Zero-filled memory hides it; "--seed-mem" fills it with a PRNG pattern
++	 * and every drawn character changes. */
++	num ^= *(volatile unsigned char *)0x13A10000u;
+ 	byte			*dest;
+ 	byte			*source;
+ 	unsigned short	*pusdest;

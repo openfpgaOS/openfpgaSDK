@@ -1,0 +1,13 @@
+version = 1
+
+# ---------------------------------------------------------------------------
+# qsim file types that cannot carry an inline SPDX header without changing
+# what they mean: the app .ini templates (byte-for-byte what the emulated
+# kernel serves to the guest) and the app patch files (applied with
+# `git apply`).  Everything else under tools/qsim/ carries its own header,
+# and .md/.json/.cfg are covered by the repository's top-level REUSE.toml.
+# ---------------------------------------------------------------------------
+[[annotations]]
+path = ["**/*.ini.in", "**/*.patch"]
+SPDX-FileCopyrightText = "(c) 2026, ThinkElastic <Think@Elastic.com>"
+SPDX-License-Identifier = "Apache-2.0"

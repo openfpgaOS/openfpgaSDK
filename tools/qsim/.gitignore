@@ -1,0 +1,11 @@
+# qsim build outputs and run artifacts
+qsim
+gputest
+build/
+runs/
+apps/*/noise/elfs/
+apps/*/noise/logs/
+apps/*/noise/runs/
+apps/*/workloads/gen_play1.work/
+rtlsim/
+__pycache__/

@@ -1,0 +1,74 @@
+#------------------------------------------------------------------------------
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileType: SOURCE
+# SPDX-FileCopyrightText: (c) 2026, ThinkElastic <Think@Elastic.com>
+#------------------------------------------------------------------------------
+
+# qsim CPU core: library, self-tests, benchmarks.
+#   make -f Makefile.cpu            libqsimcpu.a + host test tools
+#   make -f Makefile.cpu guests     (re)build guest ELFs + objdump data in the SDK container
+#   make -f Makefile.cpu test       full CPU self-test suite (tests/cpu/run_tests.sh)
+#   make -f Makefile.cpu bench      interpreter speed (fast and profiling)
+CC      ?= gcc
+OPT     ?= -O2
+CFLAGS  ?= $(OPT) -g -march=native -std=gnu11 -Wall -Wextra -Wno-unused-label \
+           -fno-strict-aliasing -ffp-contract=off -fno-fast-math -fno-math-errno
+BUILD   := build/cpu
+CPU_SRCS := cpu.c fpu.c cache.c prof.c qelf.c lint.c
+CPU_HDRS := cpu.h cpu_ops.h cpu_exec.h fpu.h fpu_fast.h cache.h prof.h qelf.h lint.h
+CPU_OBJS := $(CPU_SRCS:%.c=$(BUILD)/%.o)
+GUEST   := $(BUILD)/guest
+PROGS   := prog_mix prog_bench
+HOSTPROG_FLAGS := -O2 -ffp-contract=off -fno-tree-loop-distribute-patterns -Wall
+
+all: $(BUILD)/libqsimcpu.a tests
+
+tests: $(BUILD)/test_fpu_host $(BUILD)/cpurun $(BUILD)/test_api $(BUILD)/decode_dump \
+       $(BUILD)/test_elf_helpers $(PROGS:%=$(BUILD)/host/%)
+
+$(BUILD) $(BUILD)/host:
+	mkdir -p $@
+
+$(BUILD)/%.o: %.c $(CPU_HDRS) | $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/libqsimcpu.a: $(CPU_OBJS)
+	rm -f $@ && ar rcs $@ $^
+
+$(BUILD)/test_fpu_host: tests/cpu/test_fpu_host.c tests/cpu/ref_f32.c fpu.c fpu.h fpu_fast.h | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ tests/cpu/test_fpu_host.c tests/cpu/ref_f32.c fpu.c -lgmp -lm
+
+$(BUILD)/cpurun: tests/cpu/cpurun.c tests/cpu/ref_f32.c $(BUILD)/libqsimcpu.a $(wildcard $(GUEST)/stubs_meta.h)
+	$(CC) $(CFLAGS) -I. -Itests/cpu $(if $(wildcard $(GUEST)/stubs_meta.h),-DWITH_STUBS -I$(GUEST)) \
+	    -o $@ tests/cpu/cpurun.c tests/cpu/ref_f32.c $(BUILD)/libqsimcpu.a -lgmp -lm
+
+$(BUILD)/test_api: tests/cpu/test_api.c $(BUILD)/libqsimcpu.a
+	$(CC) $(CFLAGS) -I. -o $@ tests/cpu/test_api.c $(BUILD)/libqsimcpu.a -lm
+
+$(BUILD)/decode_dump: tests/cpu/decode_dump.c $(BUILD)/libqsimcpu.a
+	$(CC) $(CFLAGS) -I. -o $@ tests/cpu/decode_dump.c $(BUILD)/libqsimcpu.a -lm
+
+$(BUILD)/musl_ref.a: tests/cpu/build_muslref.sh | $(BUILD)
+	bash tests/cpu/build_muslref.sh
+
+$(BUILD)/test_elf_helpers: tests/cpu/test_elf_helpers.c $(BUILD)/libqsimcpu.a $(BUILD)/musl_ref.a
+	$(CC) $(CFLAGS) -Wno-misleading-indentation -frounding-math -fsignaling-nans -I. -Itests/cpu \
+	    -o $@ tests/cpu/test_elf_helpers.c $(BUILD)/libqsimcpu.a $(BUILD)/musl_ref.a -lm
+
+$(BUILD)/host/%: tests/cpu/guest/progs/%.c tests/cpu/guest/progs/progio.h | $(BUILD)/host
+	$(CC) $(HOSTPROG_FLAGS) -o $@ $<
+
+guests:
+	bash tests/cpu/build_guests.sh
+
+test: all
+	bash tests/cpu/run_tests.sh
+
+bench: all
+	$(BUILD)/cpurun --quiet --max 20000000000 $(GUEST)/prog_bench_long.elf
+	$(BUILD)/cpurun --quiet --prof --max 6000000000 $(GUEST)/prog_bench_long.elf 2>&1 | head -3
+
+clean:
+	rm -rf $(BUILD)/*.o $(BUILD)/*.a $(BUILD)/test_* $(BUILD)/cpurun $(BUILD)/decode_dump $(BUILD)/host $(BUILD)/muslref
+
+.PHONY: all tests guests test bench clean

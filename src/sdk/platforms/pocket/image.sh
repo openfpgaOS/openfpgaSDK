@@ -42,8 +42,8 @@ mkdir -p "$ASSET_DIR"
 
 # Runtime FPGA artifacts (each copied independently so a missing one is
 # reported, not silently swallowed alongside the others).  The bitstream
-# is variant-named (os25.rbf_r / os30.rbf_r); copy exactly
-# the one this core's core.json points at — the single source of truth set
+# is variant-named (os25.rbf_r / os30.rbf_r); copy every variant
+# this core's core.json points at — the single source of truth set
 # at scaffold time (customize.sh --variant).  VARIANT=os20 (env) overrides
 # per-assembly: the STAGED core.json is rewritten so the core boots that
 # bitstream, while dist/ keeps the scaffold default.
@@ -58,6 +58,23 @@ if [ -n "$VARIANT" ] && [ "${VARIANT}.rbf_r" != "$RBF" ]; then
     echo "  variant override: core boots $RBF"
 fi
 
+# Include every selectable variant, including secondary menu entries.
+RBF_LIST=$(python3 - "$CORE_DIR/core.json" <<'PY_CORE'
+import json, sys
+with open(sys.argv[1]) as source:
+    cores = json.load(source)['core']['cores']
+if not cores:
+    raise SystemExit('Error: core.json declares no FPGA cores')
+for name in dict.fromkeys(core['filename'] for core in cores):
+    print(name)
+PY_CORE
+)
+# macOS still ships Bash 3.2, which has no mapfile/readarray builtin.
+RBF_FILES=()
+while IFS= read -r name; do
+    RBF_FILES+=("$name")
+done <<< "$RBF_LIST"
+
 # Publish-manifest guard: openfpgaOS `make sdk` records md5s of the runtime
 # set it publishes atomically (runtime/MANIFEST).  A staged artifact that no
 # longer matches means a hand-mixed runtime set (e.g. a lone os.bin copied
@@ -66,7 +83,7 @@ fi
 # (pre-manifest publishes, or deliberately deleted to override).
 MANIFEST="$ROOT/runtime/MANIFEST"
 if [ -f "$MANIFEST" ]; then
-    for f in "pocket/$RBF" "pocket/os.bin" "pocket/loader.bin"; do
+    for f in "${RBF_FILES[@]/#/pocket/}" "pocket/os.bin" "pocket/loader.bin"; do
         [ -f "$ROOT/runtime/$f" ] || continue
         want=$(awk -v p="./$f" '$2==p{print $1}' "$MANIFEST")
         [ -n "$want" ] || continue
@@ -79,10 +96,12 @@ if [ -f "$MANIFEST" ]; then
         fi
     done
 fi
-for f in "$RBF" loader.bin; do
-    [ -f "$RT/$f" ] && cp "$RT/$f" "$CORE_DIR" || echo "  warn: runtime/$f missing (run 'make sdk VARIANT=… DEST=…' in openfpgaOS)"
+for f in "${RBF_FILES[@]}" loader.bin; do
+    [ -f "$RT/$f" ] || { echo "Error: runtime/$f missing (run 'make sdk VARIANT=… DEST=…' in openfpgaOS)"; exit 1; }
+    cp "$RT/$f" "$CORE_DIR"
 done
-[ -f "$RT/os.bin" ] && cp "$RT/os.bin" "$ASSET_DIR/" || echo "  warn: runtime/os.bin missing"
+[ -f "$RT/os.bin" ] || { echo "Error: runtime/os.bin missing"; exit 1; }
+cp "$RT/os.bin" "$ASSET_DIR/"
 
 # Soundfonts (bank.ofsf + any game .ofsf) — target-agnostic, at runtime/ root.
 for s in "$ROOT"/runtime/*.ofsf; do [ -f "$s" ] && cp "$s" "$ASSET_DIR/"; done

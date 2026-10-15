@@ -1,0 +1,11 @@
+[os]
+GAME=Quake
+INSTANCE=Quake
+ELF=quake.elf
+ARGS=$ARGS
+
+[quake]
+CONFIG=quake.cfg
+PAK_id1_0=pak0.pak
+PAK_id1_1=PAK1.PAK
+HOST_SPEEDS=0

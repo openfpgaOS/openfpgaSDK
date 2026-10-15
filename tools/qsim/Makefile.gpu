@@ -1,0 +1,25 @@
+#------------------------------------------------------------------------------
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileType: SOURCE
+# SPDX-FileCopyrightText: (c) 2026, ThinkElastic <Think@Elastic.com>
+#------------------------------------------------------------------------------
+
+# qsim GPU raster model: unit/equivalence tooling (independent of the main qsim Makefile)
+CC ?= gcc
+CFLAGS ?= -O2 -g -Wall -Wextra -std=gnu11
+
+all: gputest
+
+gputest: gputest.c gpu.c gpu.h gpuvec.h lint.c lint.h
+	$(CC) $(CFLAGS) -o $@ gputest.c gpu.c lint.c -lm
+
+rtl:
+	./rtlsim/build.sh
+
+clean:
+	rm -f gputest
+
+.PHONY: all rtl clean
+
+gputest_trace: gputest.c gpu.c gpu.h gpuvec.h lint.c lint.h
+	$(CC) $(CFLAGS) -DGPU_TRACE -o $@ gputest.c gpu.c lint.c -lm

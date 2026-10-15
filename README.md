@@ -826,6 +826,26 @@ Everything else — video, audio, GPU, mixer, MIDI, saves, file I/O, the SDL2 la
 
 ## Bitstream Variants (Pocket)
 
+The September 14 os25 optimization build requires updated applications: it
+omits the GPU command-upload DMA engine. `of_gpu_init()` automatically selects
+direct CPU uploads when the GPU status register advertises that capability.
+Custom initializers must call `of_gpu_use_cpu_ring()` before staging commands.
+The SDK keeps DMA fallback for older cores, including existing os20/os30 builds.
+Install the updated core and application ELF together. Batching and fence APIs
+are unchanged; texture reads, framebuffer writes and audio transfers still use
+their existing hardware paths.
+
+The upload follow-up copies commands in groups of 16 words, loading four before
+each group of stores. Initialization also starts new fence tokens after the
+GPU's retained completion value, preventing an early return after soft reset.
+SDK builds now treat public API headers as object dependencies, so updating an
+inline implementation triggers recompilation of existing application objects.
+
+This os25 build runs at 100 MHz with setup slack −0.814 ns and hold slack
++0.015 ns. It remains an overclocked test build. A compatible os25 image retaining
+command DMA is also available in the OS repository's
+`build/pocket-port-20260914/core-compatible/` directory.
+
 The Pocket's Cyclone V can't fit every GPU feature at once, so the Pocket OS
 ships as **two bitstream variants** of the *same* firmware — `os.bin` is one
 caps-driven binary for both; only the FPGA image differs. Both ship in
@@ -984,6 +1004,33 @@ embedded bootloaders in lockstep.
 | `scripts/copy.sh` | Copies build/ to Pocket SD card |
 | `scripts/debug.sh` | Push binary via UART, reset core, stream output |
 | `scripts/package.sh` | ZIPs a core for distribution |
+
+---
+
+## Simulation, Profiling and Rendering-Equivalence Gate (qsim)
+
+`tools/qsim/` boots a **production app ELF** — the same file you copy to the SD
+card — inside an emulated os25 Pocket on your workstation: a VexiiRiscv
+rv32imafc core with a cache/timing model, the kernel services and ECALLs, and a
+GPU raster model validated byte-for-byte against the `gpu_core` RTL. No device
+needed.
+
+```bash
+cd tools/qsim && make
+./run.sh myapp.elf out/bench bench1     # per-function profile + per-frame hashes
+./gate.sh before.elf after.elf out/gate # bit-exact rendering equivalence: PASS / FAIL
+```
+
+Use it to profile an app per function, and to prove that an optimization or
+refactor renders **identically** — the gate compares per-frame pixel, z and
+palette hashes across every workload in five GPU-schedule and memory-coherency
+modes, so it also catches a missing fence wait or a missing `of_cache_flush_range`
+that an infinitely fast GPU and flat memory would hide.
+
+Your app supplies an ELF, its data files, a deterministic workload and a small
+app-profile file. See `tools/qsim/README.md` (the tool, its guarantees and its
+limits), `tools/qsim/ENV_SPEC.md` (the emulated environment) and
+`tools/qsim/apps/quake/` (the worked example).
 
 ---
 
