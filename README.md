@@ -2,7 +2,7 @@
 
 Build games for the [Analogue Pocket](https://www.analogue.co/pocket) and [MiSTer](https://mister-devel.github.io/MkDocs_MiSTer/) (DE10-Nano / SuperStation One) in C or C++. The same app `.elf` runs unchanged on both platforms — see [Multiplatform](#multiplatform).
 
-**Hardware (both platforms):** VexiiRiscv rv32imafc @ 100 MHz, 8 KB I-cache + 32 KB D-cache, 64 MB SDRAM, 320x240 video, 48 kHz stereo audio, 32-voice hardware PCM mixer, and sample-based MIDI playback.
+**Hardware:** RISC-V soft CPU, 64 MB SDRAM, 320x240 video, 48 kHz stereo audio, a 32-voice hardware PCM mixer, and sample-based MIDI playback. CPU configuration, clock, cache capacity and GPU features depend on the selected Pocket or MiSTer variant; the bundled-runtime notes below describe the current Pocket os25 image.
 
 > **New here?** See [GETTING_STARTED.md](GETTING_STARTED.md) — clone to running code in 5 minutes.
 
