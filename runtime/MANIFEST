@@ -1,3 +1,8 @@
+# Scoped Pocket FPGA refresh 2026-10-30; other entries retain their prior provenance.
+# os20: seed 35, worst restricted Fmax 95.26 MHz; fitted CPU 8c34f9e887f073f00a3eaf1f00df02b118fe9ac0f00f01f270b28606a62bba2f
+# os25: seed 20, worst restricted Fmax 96.87 MHz; fitted CPU d73f954af9d56146e0172c62677e0cc46a3ce7e5661098c237ce0203382fe0ad
+# Configured 100 MHz; this is not 100 MHz timing closure.
+# ap_core.sof is the selected os25 SOF. Shared OS/loader unchanged.
 # openfpgaOS runtime publish manifest — written by 'make sdk'.
 # Consumers (platforms/<t>/image.sh) verify staged artifacts against
 # these md5s; a mismatch means a hand-mixed runtime set, which boots
@@ -5,10 +10,10 @@
 769c01d5b16c190a9d7745264e5072e4  ./bank.ofsf
 2e5435c21ecd8f018f40b3e9acc927b9  ./mister/openfpgaOS.rbf
 198dc5b243f94e8b47b81bdf4390c477  ./mister/os.bin
-48d8236e74a369fb298b2267ecae4322  ./pocket/ap_core.sof
+a972c86ad9093094959dfad000d84107  ./pocket/ap_core.sof
 48c625e82daf68d14680893ac8cb27af  ./pocket/loader.bin
-faad7e5e84ea0f864587712dfd16a98f  ./pocket/os20.rbf_r
-ba4bc8bb7bf0c0d409955d4967d377b9  ./pocket/os25.rbf_r
+0dd8c617219b42e245bfd87ad2e9f33c  ./pocket/os20.rbf_r
+0b705ccccd5b84d387b47c2cf2c45f5b  ./pocket/os25.rbf_r
 3a960eeb817d8bd4e4f7d789e29e7f20  ./pocket/os25zf.rbf_r
 8558cba71c7bb0c1ac835b9c59046ec1  ./pocket/os30-macxf.rbf_r
 85bd093d1935d16eecd68343ef5eb3b0  ./pocket/os30.rbf_r

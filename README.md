@@ -841,15 +841,29 @@ GPU's retained completion value, preventing an early return after soft reset.
 SDK builds now treat public API headers as object dependencies, so updating an
 inline implementation triggers recompilation of existing application objects.
 
-This os25 build runs at 100 MHz with setup slack −0.814 ns and hold slack
-+0.015 ns. It remains an overclocked test build. A compatible os25 image retaining
-command DMA is also available in the OS repository's
-`build/pocket-port-20260914/core-compatible/` directory.
+The October 30 runtime refresh includes a radix-4 divider for os20. Its mixed
+CPU/interrupt test takes 5.5% fewer cycles; this is not a measured game FPS gain.
+Os25 retains its existing CPU/GPU cycle behavior and cache sizes. Both retain
+the full mixer, translucency, Analogizer and Dock support.
+
+| Bundled image | Seed | Worst-corner Fmax estimate | Setup at 100 MHz | Worst hold |
+| --- | ---: | ---: | ---: | ---: |
+| os20 | 35 | 95.26 MHz | −0.498 ns | +0.042 ns |
+| os25 | 20 | 96.87 MHz | −0.323 ns | +0.078 ns |
+
+Both remain configured at 100 MHz and do **not** close main-clock setup timing.
+The used cross-clock/input setup and other timing checks pass. These are
+targeted fits, not a new full seed sweep or Pocket hardware validation.
+The SDK's default `ap_core.sof` is the selected os25 fit. Shared `os.bin` and
+`loader.bin` retain their verified pairing with the fitted boot ROM; all os30,
+os25zf and MiSTer runtime payloads are unchanged. `runtime/MANIFEST` records
+the exact refreshed images and their CPU provenance.
 
 The Pocket's Cyclone V can't fit every GPU feature at once, so the Pocket OS
-ships as **two bitstream variants** of the *same* firmware — `os.bin` is one
-caps-driven binary for both; only the FPGA image differs. Both ship in
-`runtime/pocket/` as `os25.rbf_r` and `os30.rbf_r`. The bundled SDK demo core
+ships several bitstream variants of the *same* firmware — `os.bin` is one
+caps-driven binary for all of them; the FPGA image selects the hardware.
+The SDK demo menu uses `runtime/pocket/os25.rbf_r` and `os30.rbf_r`.
+The bundled SDK demo core
 carries **both** and loads the right one **per app**. (MiSTer's larger FPGA
 gets a single superset bitstream with everything, so this split is Pocket-only.)
 
