@@ -9,8 +9,8 @@
             "description": "openfpgaOS 3D / hardware-triangle demos",
             "author": "ThinkElastic",
             "url": "",
-            "version": "0.7",
-            "date_release": "2026-06-17"
+            "version": "0.9.6",
+            "date_release": "2026-11-14"
         },
         "framework": {
             "target_product": "Analogue Pocket",
