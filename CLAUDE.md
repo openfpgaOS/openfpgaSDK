@@ -240,9 +240,12 @@ game double-handles input.
       with CPU work.
 - [ ] Colormap/lighting via palookup slots, translucency via the HW table —
       not CPU lookups.
-- [ ] Hot inner loops annotated `OF_FASTTEXT` (and tables `OF_FASTDATA`) —
-      ~24 KB of zero-wait-state BRAM; spend it on the rasterizer/math
-      kernels, not on code that the 128 KB D-cache already serves well.
+- [ ] Hot inner loops annotated `OF_FASTTEXT` — ~24 KB of BRAM whose
+      I-cache refills never wait on the SDRAM bus; spend it on the
+      rasterizer/math kernels. Do **not** put hot tables or scalars in
+      `OF_FASTDATA`: that region bypasses the D-cache, so every access is
+      a multi-cycle bus transaction. It is for interrupt-context state
+      only (see `of_fastram.h`).
 - [ ] Inner loops in fixed point; the FPU (`OF_HW_FPU`) is real but
       int↔float churn in span loops is not free.
 - [ ] Cached writes + `of_cache_flush_range` instead of uncached-alias writes.
