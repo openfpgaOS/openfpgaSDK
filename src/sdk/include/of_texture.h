@@ -127,7 +127,12 @@ static inline uint32_t _of_tex_fast_put(const void *src, uint32_t nbytes) {
  * the GPU at the right copy as the fetch domain flips.  `cm` must be SDRAM. */
 static inline void of_texture_set_colormap(const void *cm, uint32_t nbytes) {
     _of_tex_cmap_sdram = _of_tex_gpu_addr(cm);
-    if (_of_tex_fast_size && (_of_tex_fast_top + ((nbytes + 15u) & ~15u)) <= _of_tex_fast_size) {
+    /* GPU_PALOOKUP_BASE keeps bits [25:14] only: the fast copy must start on
+     * a 16 KB boundary, wherever textures created earlier left the top. */
+    uint32_t cm_off = (_of_tex_fast_top + (OF_GPU_PALOOKUP_STRIDE - 1u))
+                    & ~(OF_GPU_PALOOKUP_STRIDE - 1u);
+    if (_of_tex_fast_size && (cm_off + ((nbytes + 15u) & ~15u)) <= _of_tex_fast_size) {
+        _of_tex_fast_top      = cm_off;
         _of_tex_cmap_fast     = _of_tex_fast_put(cm, nbytes);
         _of_tex_cmap_has_fast = 1;
     } else {
@@ -181,6 +186,10 @@ static inline void of_texture_update(const of_texture_t *tex, uint32_t nbytes) {
 /* Reset the fast allocator + colormap (e.g. on level change).  Re-create
  * textures and re-set the colormap afterwards; old handles become stale. */
 static inline void of_texture_reset(void) {
+    /* The GPU may still be fetching the previous textures from the offsets
+     * about to be reused: drain it first. */
+    if (_of_tex_fast_size)
+        of_gpu_finish();
     _of_tex_fast_top = 0u;
     _of_tex_cmap_has_fast = 0;
     _of_tex_bound = -1;

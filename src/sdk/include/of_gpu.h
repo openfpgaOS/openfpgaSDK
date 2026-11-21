@@ -905,6 +905,12 @@ static inline void of_gpu_init(void) {
     for (volatile int i = 0; i < 100; i++) {}
     GPU_CTRL = 4;               /* ring_reset: clear wr_addr + wrptr + rdptr */
     GPU_CTRL = 1;               /* enable */
+    /* Texture fetches start on SDRAM, whatever a previous app left routed to
+     * fast texture memory (neither reset clears the route).  The soft reset
+     * stopped the pipeline and the delay outlasts any texture-cache fill in
+     * flight, so the fill response mux cannot switch mid-burst.  The register
+     * is ignored on cores without fast texture memory. */
+    _GPU_FAST_TEX_ENABLE = 0u;
     /* Soft/ring reset does not clear the completed fence on existing cores.
      * Start beyond it so reinitialization cannot accept a stale completion. */
     _gpu_fence_next = GPU_FENCE_REACHED + 1u;
@@ -1137,6 +1143,9 @@ static inline void of_gpu_prepare_framebuffer_for_cpu(void) {
 
 static inline void of_gpu_shutdown(void) {
     of_gpu_finish();
+    /* Leave texture fetches on SDRAM for whatever runs next (the GPU is idle,
+     * so no fill is in flight).  Ignored without fast texture memory. */
+    _GPU_FAST_TEX_ENABLE = 0u;
     GPU_CTRL = 0;
     _gpu_state_valid = 0;
     _gpu_span_hdr_valid = 0;
