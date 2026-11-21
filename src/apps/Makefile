@@ -40,6 +40,12 @@ BUILD     = $(SDK_ROOT)/build/pocket/sdk
 # Discover SDK apps: every src/apps/<name>/ that has its own Makefile.
 APPS = $(sort $(patsubst %/,%,$(dir $(wildcard */Makefile))))
 
+# Apps that still build but are left out of the Pocket demo bundle: they need
+# hardware no bundled Pocket bitstream has.  triangles uses the hardware
+# vertex-triangle path (OF_HW_GPU_VERT_TRI), which os20 and os25 do not carry;
+# build it per app for MiSTer (make build APP=triangles TARGET=mister).
+POCKET_SKIP = triangles
+
 all: build-apps release
 
 build-apps:
@@ -54,12 +60,11 @@ release:
 	@rm -rf $(BUILD)
 	@mkdir -p $(SDK_ROOT)/build/pocket
 	@cp -r $(DIST)/ $(BUILD)/
-	@# Runtime binaries (pocket-specific → runtime/pocket/).  Each core pins ONE
-	@# bitstream as its sole cores[] entry with per-core chip32_vm (framework-level
-	@# chip32_vm disables the APF datatable auto-population — see git history).  So
-	@# os25/os30 ship as SEPARATE cores: the os25 demo core (os25.rbf_r) and the
-	@# os30 3D core (os30.rbf_r).  Give every core dir exactly the bitstream(s) its
-	@# own core.json names, plus the shared loader VM.
+	@# Runtime binaries (pocket-specific → runtime/pocket/).  The demo core pins ONE
+	@# bitstream (os25.rbf_r) as its sole cores[] entry with per-core chip32_vm
+	@# (framework-level chip32_vm disables the APF datatable auto-population — see
+	@# git history).  Give every core dir exactly the bitstream(s) its own
+	@# core.json names, plus the shared loader VM.
 	@for core in $(BUILD)/Cores/*/; do \
 		for rbf in $$(grep -o '"[^"]*\.rbf_r"' "$$core/core.json" | tr -d '"' | sort -u); do \
 			cp $(RUNTIME_POCKET)/$$rbf "$$core/" || exit 1; \
@@ -72,6 +77,7 @@ release:
 	@cp $(RUNTIME)/bank.ofsf $(BUILD)/Assets/$(PLATFORM)/common/ 2>/dev/null || true
 	@# Demo ELFs + data files
 	@for app in $(APPS); do \
+		case " $(POCKET_SKIP) " in *" $$app "*) continue ;; esac; \
 		[ -f "$(SDK_ROOT)/.obj/sdk/$$app/app.elf" ] && \
 			cp "$(SDK_ROOT)/.obj/sdk/$$app/app.elf" "$(BUILD)/Assets/$(PLATFORM)/common/$$app.elf"; \
 		for f in $$app/*.mid $$app/*.mod $$app/*.wav $$app/*.dat $$app/*.png \
@@ -79,16 +85,6 @@ release:
 			[ -f "$$f" ] && cp "$$f" "$(BUILD)/Assets/$(PLATFORM)/common/"; \
 		done; \
 	done 2>/dev/null; true
-	@# --- os30 3D core lives on its OWN platform (openfpgaos3d) so the Pocket
-	@# reconfigures the FPGA to os30 instead of reusing the demo core's
-	@# already-loaded os25.  Give that platform the shared runtime + triangles.
-	@if [ -d "$(BUILD)/Assets/openfpgaos3d" ]; then \
-		mkdir -p $(BUILD)/Assets/openfpgaos3d/common; \
-		cp $(RUNTIME_POCKET)/os.bin $(BUILD)/Assets/openfpgaos3d/common/; \
-		cp $(RUNTIME)/bank.ofsf $(BUILD)/Assets/openfpgaos3d/common/ 2>/dev/null || true; \
-		[ -f "$(SDK_ROOT)/.obj/sdk/triangles/app.elf" ] && \
-			cp "$(SDK_ROOT)/.obj/sdk/triangles/app.elf" "$(BUILD)/Assets/openfpgaos3d/common/triangles.elf" || true; \
-	fi
 	@echo "Ready: build/pocket/sdk/"
 
 new:

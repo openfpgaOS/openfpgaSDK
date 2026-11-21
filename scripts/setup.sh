@@ -208,7 +208,7 @@ RUNTIME="$SDK_ROOT/runtime/pocket"
 
 echo
 MISSING=0
-# Bitstream(s) are variant-named (os25.rbf_r / os30.rbf_r); at least one
+# Bitstream(s) are variant-named (os20.rbf_r / os25.rbf_r); at least one
 # must be present.  A core picks its variant by name in core.json.
 if compgen -G "$RUNTIME"/*.rbf_r >/dev/null 2>&1; then
     for f in "$RUNTIME"/*.rbf_r; do

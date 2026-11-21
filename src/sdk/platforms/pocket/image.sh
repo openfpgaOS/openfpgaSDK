@@ -42,7 +42,7 @@ mkdir -p "$ASSET_DIR"
 
 # Runtime FPGA artifacts (each copied independently so a missing one is
 # reported, not silently swallowed alongside the others).  The bitstream
-# is variant-named (os25.rbf_r / os30.rbf_r); copy every variant
+# is variant-named (os20.rbf_r / os25.rbf_r); copy every variant
 # this core's core.json points at — the single source of truth set
 # at scaffold time (customize.sh --variant).  VARIANT=os20 (env) overrides
 # per-assembly: the STAGED core.json is rewritten so the core boots that

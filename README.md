@@ -636,7 +636,7 @@ When there's only one instance JSON for your app, the Pocket auto-selects it —
 |---------|------|---------|
 | 0 | Game | Instance selector (SDK-owned in data.json) |
 | 1 | OS Binary | `os.bin` — loaded by bootloader via DMA |
-| 2 | OS Config | `<app>.ini` — app config; the chip32 loader scans it for `VARIANT=os30` to pick the bitstream, then the OS parses it |
+| 2 | OS Config | `<app>.ini` — app config, parsed by the OS |
 | 3 | Application | Your app ELF — loaded by OS kernel |
 | 4-6 | Data 1-3 | App data files (WAD, GRP, images, audio, etc.) |
 | 7 | Sound Bank | Optional `.ofsf` SoundFont bank for MIDI |
@@ -788,9 +788,9 @@ src/sdk/platforms/
 
 The per-platform core artifacts live under `runtime/` and are synced from an openfpgaOS checkout with `make sdk DEST=path/to/this/sdk` — they are build artifacts, not files to edit:
 
-- `runtime/pocket/` — Pocket: `os25.rbf_r` **and** `os30.rbf_r` (two bitstream
+- `runtime/pocket/` — Pocket: `os20.rbf_r` and `os25.rbf_r` (two bitstream
   variants — see [Bitstream Variants](#bitstream-variants-pocket)), `os.bin`,
-  `loader.bin`, `bank.ofsf`
+  `loader.bin`, `ap_core.sof`; `runtime/bank.ofsf` is shared
 - `runtime/mister/` — MiSTer: `os.bin` (`make sdk` no longer vendors the core bitstream into game repos — the game-agnostic core installs once from the openfpgaOS MiSTer core release, `make package/release TARGET=mister` in openfpgaOS)
 
 ### MiSTer quickstart
@@ -826,115 +826,56 @@ Everything else — video, audio, GPU, mixer, MIDI, saves, file I/O, the SDL2 la
 
 ## Bitstream Variants (Pocket)
 
-The September 14 os25 optimization build requires updated applications: it
-omits the GPU command-upload DMA engine. `of_gpu_init()` automatically selects
-direct CPU uploads when the GPU status register advertises that capability.
-Custom initializers must call `of_gpu_use_cpu_ring()` before staging commands.
-The SDK keeps DMA fallback for older cores, including existing os20/os30 builds.
-Install the updated core and application ELF together. Batching and fence APIs
-are unchanged; texture reads, framebuffer writes and audio transfers still use
-their existing hardware paths.
+The Pocket's Cyclone V can't fit every feature at once, so the SDK ships two
+bitstream variants of the same firmware. `os.bin` is one caps-driven binary
+for both; the FPGA image selects the hardware. (MiSTer's larger FPGA gets a
+single superset bitstream, so this split is Pocket-only.)
 
-The upload follow-up copies commands in groups of 16 words, loading four before
-each group of stores. Initialization also starts new fence tokens after the
-GPU's retained completion value, preventing an early return after soft reset.
-SDK builds now treat public API headers as object dependencies, so updating an
-inline implementation triggers recompilation of existing application objects.
+| Bundled image | Seed | Setup at 100 MHz | Worst hold |
+| --- | ---: | ---: | ---: |
+| os20 | 18 | −0.734 ns | +0.071 ns |
+| os25 | 22 | −0.431 ns | +0.099 ns |
 
-The October 30 runtime refresh includes a radix-4 divider for os20. Its mixed
-CPU/interrupt test takes 5.5% fewer cycles; this is not a measured game FPS gain.
-Os25 retains its existing CPU/GPU cycle behavior and cache sizes. Both retain
-the full mixer, translucency, Analogizer and Dock support.
+Both are configured at 100 MHz and do **not** close main-clock setup timing;
+they are overclocked builds. `runtime/MANIFEST` records the exact images.
+The SDK's `ap_core.sof` (used by `make debug`) is the os25 fit.
 
-| Bundled image | Seed | Worst-corner Fmax estimate | Setup at 100 MHz | Worst hold |
-| --- | ---: | ---: | ---: | ---: |
-| os20 | 35 | 95.26 MHz | −0.498 ns | +0.042 ns |
-| os25 | 20 | 96.87 MHz | −0.323 ns | +0.078 ns |
+**Kernel and bitstream belong together.** The bundled `os.bin` reports API
+0.9.1, which tells applications that the mixer divides the final mix by 4
+instead of 16 (`of_get_version() >= OF_VERSION(0,9,1)`). Both bundled images
+are built with that mixer. Don't pair this `os.bin` with an older `.rbf_r`,
+or an older `os.bin` with these images. SDK 0.9.6 also shipped `os30`,
+`os25zf`, `os30-macxf` and `os30-vtx` images; they predate this kernel and
+were removed in 0.9.7. Games that need os30 (Quake2) bundle their own
+matching core and kernel.
 
-Both remain configured at 100 MHz and do **not** close main-clock setup timing.
-The used cross-clock/input setup and other timing checks pass. These are
-targeted fits, not a new full seed sweep or Pocket hardware validation.
-The SDK's default `ap_core.sof` is the selected os25 fit. Shared `os.bin` and
-`loader.bin` retain their verified pairing with the fitted boot ROM; all os30,
-os25zf and MiSTer runtime payloads are unchanged. `runtime/MANIFEST` records
-the exact refreshed images and their CPU provenance.
+The os25 image omits the GPU command-upload DMA engine: `of_gpu_init()`
+selects direct CPU uploads when the GPU status register advertises them, and
+custom initializers must call `of_gpu_use_cpu_ring()` before staging commands.
+Install a core and the application ELFs built with the same SDK together.
 
-The Pocket's Cyclone V can't fit every GPU feature at once, so the Pocket OS
-ships several bitstream variants of the *same* firmware — `os.bin` is one
-caps-driven binary for all of them; the FPGA image selects the hardware.
-The SDK demo menu uses `runtime/pocket/os25.rbf_r` and `os30.rbf_r`.
-The bundled SDK demo core
-carries **both** and loads the right one **per app**. (MiSTer's larger FPGA
-gets a single superset bitstream with everything, so this split is Pocket-only.)
+### Selecting the variant for a core
 
-### Selecting which variant an app runs on
+A core pins one variant: its `core.json` names one bitstream in `cores[]`.
+The bundled demo core uses `os25.rbf_r`. For a custom core, choose at scaffold
+time (`scripts/customize.sh --variant os20|os25`) or override per build with
+`VARIANT=os20 make build CORE=<name>`.
 
-Put one line in the app's `.ini` (the `[os]` config in slot 2):
-
-```ini
-[os]
-ELF=triangles.elf
-VARIANT=os30          # or os25 — the default 2.5D / span-group bitstream
-```
-
-That `.ini` line **is** the control — there is no build step. At launch, before
-the FPGA is configured, the chip32 loader reads the app's `.ini` and loads
-`os30.rbf_r` when it sees `VARIANT=os30`, otherwise `os25.rbf_r`. So `gpudemo`
-(span groups) boots os25 and `triangles` (vertex-triangle) boots os30 from the
-**same** demo core, each chosen as it's launched. Every bundled app declares its
-variant explicitly (`VARIANT=os25` is the default if the line is absent).
-
-> All 22 bundled demos carry a `VARIANT=` line; only `triangles` is `os30`.
-
-> ⚠️ **Dev-loop caveat (`make debug`).** Variant selection happens only on the
-> normal SD-card instance load, where the Pocket runs the chip32 loader *before*
-> configuring the FPGA. The `make debug` / DevKey loop instead JTAG-reloads a
-> fixed `ap_core.sof` (`quartus_pgm`) and hot-pushes your ELF onto the already
-> running bitstream — a JTAG reconfigure **skips the chip32 `core` instruction**,
-> so it always stays on whatever `ap_core.sof` was built (os25 by default),
-> regardless of `VARIANT=os30`. To exercise an os30 app over UART, JTAG-load an
-> os30 `.sof` yourself (`quartus_pgm -m jtag -o "p;os30_core.sof"`); to verify
-> the variant *switch*, deploy to the SD card and launch the instance normally.
-
-<details><summary>How it works under the hood</summary>
-
-- `core.json` lists both bitstreams in `cores[]` (`id 0` = os25, `id 1` = os30).
-- `data.json` gives the OS Config slot (id 2) a fixed bridge load address
-  (`0x203C0000`, a free CRAM0 gap clear of the OS-load region) so the bridge
-  places the `.ini` text where the chip32 VM can read it.
-- `src/chip32/pocket/loader.asm` runs on the Pocket host *before* the FPGA is
-  configured — the only layer that can pick the bitstream. It byte-scans the
-  `.ini` for the anchored marker `=os30` and calls `core 1` / `core 0`.
-- The release step copies **both** `.rbf_r` files into the core.
-- It's backward-compatible: a single-variant core (one `cores[]` entry, no
-  `=os30` in any `.ini`) always loads `core 0`, so nothing changes for cores
-  that ship just one bitstream.
-
-A **standalone custom core** (`make core`) doesn't need any of this — it pins
-one variant by the bitstream its own `core.json` names (point `"filename"` at
-`os30.rbf_r` for an os30 core, exactly how the Quake2 core is wired).
-</details>
+`make debug` JTAG-loads the fixed `ap_core.sof` (os25) and pushes your ELF onto
+the running bitstream, so it always exercises os25.
 
 ### What each variant gives you
 
-| Capability | **os25** (default — 2.5D) | **os30** (pure-3D triangles) |
+| Capability | **os20** (2D) | **os25** (default — 2.5D) |
 |---|:---:|:---:|
-| **Built for** | Doom, Duke3D, Wolf3D, ScummVM, Quake1 (SW alias) | Quake2, the `triangles` demo |
-| HW triangle path — `VERT_TRI` 0x4B, `PARAM_TRI` 0x49/0x4D | — | ✓ |
-| Hardware Z-buffer (`PARAM_SPAN_ZTEST`) | — | ✓ |
-| Fast texture BRAM (`tex_fast`) | — (textures from SDRAM) | ✓ |
-| Compact affine span groups `SPAN_GROUP` 0x48 | ✓ | — |
-| Column lists 0x4C (`COLUMN_LIST`) | ✓ | — |
-| GPU translucency / alpha blend (`OF_HW_GPU_ALPHA`) | ✓ | — |
-| HW audio mixer (`OF_HW_MIXER_HW`, 32 voices) | ✓ | — (caps-driven **SW** mixer; audio still works) |
-| Analogizer / SNAC, link cable, 4-player input | ✓ | — |
-| Perspective span groups + baseline affine span | ✓ | ✓ |
+| **Built for** | Diablo, ScummVM (CPU renderers) | Doom, Heretic, Hexen, Duke3D, Quake |
+| Baseline affine spans, colormaps, translucency table | ✓ | ✓ |
+| Perspective span groups (`OF_HW_GPU_PERSP`) | — | ✓ |
+| Compact span groups, column lists, parametric span lists | — | ✓ |
+| Hardware vertex triangles (`OF_HW_GPU_VERT_TRI`) | — | — |
+| HW audio mixer (32 voices) | ✓ | ✓ |
+| Analogizer / SNAC, 4-player input | ✓ | ✓ |
 | Mixer API, MIDI, save slots, file I/O, video, input | ✓ | ✓ |
-
-The perspective span group and baseline span renderer decode on **every**
-variant — that's the portable floor every Pocket build guarantees. Audio always
-works: os30 swaps the hardware mixer for the caps-driven software mixer at boot,
-transparently to apps.
 
 ### The rule: gate on capabilities, never on the variant
 
@@ -943,26 +884,23 @@ bit is set, with a fallback for when it isn't. Then **one `.elf` runs on both
 variants** (and on MiSTer) unchanged:
 
 ```c
-if (of_has_feature(OF_HW_GPU_VERT_TRI))            /* os30 / MiSTer: HW triangles */
+if (of_has_feature(OF_HW_GPU_VERT_TRI))            /* MiSTer: HW triangles        */
     draw_with_vert_tri();
-else if (of_has_feature(OF_HW_GPU_SPAN_GROUP))     /* os25 / MiSTer: span groups  */
+else if (of_has_feature(OF_HW_GPU_PERSP))          /* os25 / MiSTer: persp spans  */
     draw_with_span_groups();
 else
     draw_on_cpu();                                  /* always-available fallback   */
 ```
 
-This is why the two GPU demos target different variants: **gpudemo** uses the
-0x48 span-group modes (needs os25) and **triangles** uses the hardware
-vertex-triangle path (needs os30). Each prints the caps it needs and degrades to
-a notice on the other variant rather than rendering garbage — which is also why
-their `.ini` files set `VARIANT=` so the loader boots the right bitstream.
+The `triangles` demo uses the hardware vertex-triangle path, which neither
+Pocket image carries. It still builds, but it is not part of the Pocket demo
+bundle; build it per app for MiSTer (`make build APP=triangles TARGET=mister`).
 
 To rebuild a variant from source in the
 [openfpgaOS](https://github.com/openfpgaOS/openfpgaOS) repo:
-`make build VARIANT=os30` (default `os25`); each variant stores its own fitter
+`make build VARIANT=os20` (default `os25`); each variant stores its own fitter
 seed under `seeds/<variant>.seed`. The RISC-V bootloader is baked into each
-`.rbf` (MIF patch), so rebuild the os25/os30 pair together to keep their
-embedded bootloaders in lockstep.
+`.rbf` and must come from the same firmware build as `os.bin`.
 
 ---
 

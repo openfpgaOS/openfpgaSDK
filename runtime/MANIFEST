@@ -1,21 +1,22 @@
-# Scoped Pocket FPGA refresh 2026-10-30; other entries retain their prior provenance.
-# os20: seed 35, worst restricted Fmax 95.26 MHz; fitted CPU 8c34f9e887f073f00a3eaf1f00df02b118fe9ac0f00f01f270b28606a62bba2f
-# os25: seed 20, worst restricted Fmax 96.87 MHz; fitted CPU d73f954af9d56146e0172c62677e0cc46a3ce7e5661098c237ce0203382fe0ad
+# Scoped Pocket refresh 2026-11-20 (openfpgaOS source f36f499), SDK 0.9.7:
+# pocket/os.bin reports API 0.9.1 (mixer mix-down /4) and must only be paired
+# with images built from the /4 mixer; both bundled images are.
+# os20: seed 18, setup -0.734 ns, worst hold +0.071 ns (source ceeffcc).
+# os25: seed 22, setup -0.431 ns, worst hold +0.099 ns (source f36f499).
 # Configured 100 MHz; this is not 100 MHz timing closure.
-# ap_core.sof is the selected os25 SOF. Shared OS/loader unchanged.
+# ap_core.sof is the selected os25 SOF. loader.bin and bank.ofsf unchanged.
+# os25zf, os30, os30-macxf and os30-vtx were removed: they predate the /4
+# mixer and are not built for this kernel. MiSTer entries retain their prior
+# provenance.
 # openfpgaOS runtime publish manifest — written by 'make sdk'.
 # Consumers (platforms/<t>/image.sh) verify staged artifacts against
 # these md5s; a mismatch means a hand-mixed runtime set, which boots
-# into undefined behaviour.  source: openfpgaos-mister-v0.9.5-dirty
+# into undefined behaviour.
 769c01d5b16c190a9d7745264e5072e4  ./bank.ofsf
 2e5435c21ecd8f018f40b3e9acc927b9  ./mister/openfpgaOS.rbf
 198dc5b243f94e8b47b81bdf4390c477  ./mister/os.bin
-a972c86ad9093094959dfad000d84107  ./pocket/ap_core.sof
+07856781c58b92d2e4491b5dd6e722ca  ./pocket/ap_core.sof
 48c625e82daf68d14680893ac8cb27af  ./pocket/loader.bin
-0dd8c617219b42e245bfd87ad2e9f33c  ./pocket/os20.rbf_r
-0b705ccccd5b84d387b47c2cf2c45f5b  ./pocket/os25.rbf_r
-3a960eeb817d8bd4e4f7d789e29e7f20  ./pocket/os25zf.rbf_r
-8558cba71c7bb0c1ac835b9c59046ec1  ./pocket/os30-macxf.rbf_r
-85bd093d1935d16eecd68343ef5eb3b0  ./pocket/os30.rbf_r
-a0811076cb58ea950f39cdecf67332be  ./pocket/os30-vtx.rbf_r
-bd9a5a7ecdada8625f01b691f82e3784  ./pocket/os.bin
+b84abcfecad61b500e766315b3b616c3  ./pocket/os20.rbf_r
+2bbdf0c7bb014682219a7aa7a5ed9d92  ./pocket/os25.rbf_r
+1cfb6a10ab683f3a223736f5fadbac76  ./pocket/os.bin

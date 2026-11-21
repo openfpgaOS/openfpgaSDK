@@ -183,14 +183,14 @@ def image_fixture(fixture):
     metadata = json.loads(fixture.metadata)
     metadata["core"]["cores"] = [
         {"name": "os25", "id": 0, "filename": "os25.rbf_r"},
-        {"name": "os30", "id": 1, "filename": "os30.rbf_r"},
+        {"name": "os20", "id": 1, "filename": "os20.rbf_r"},
     ]
     write(dist / "Cores/ThinkElastic.doom/core.json", json.dumps(metadata))
     write(dist / "Assets/doom/common/doom.ini", "ELF=doom.elf")
     write(dist / "Platforms/doom.json", "{}")
     write(fixture.root / "app.elf", "fixture app")
     manifest = []
-    for name in ("os25.rbf_r", "os30.rbf_r", "loader.bin", "os.bin"):
+    for name in ("os25.rbf_r", "os20.rbf_r", "loader.bin", "os.bin"):
         path = fixture.root / "runtime/pocket" / name
         write(path, name)
         manifest.append(hashlib.md5(path.read_bytes()).hexdigest() + "  ./pocket/" + name)
@@ -210,7 +210,7 @@ def image_variants(fixture):
     result = run_image(fixture, dist)
     assert result.returncode == 0, result.stdout + result.stderr
     core = fixture.root / "build/pocket/doom/Cores/ThinkElastic.doom"
-    for name in ("os25.rbf_r", "os30.rbf_r", "loader.bin"):
+    for name in ("os25.rbf_r", "os20.rbf_r", "loader.bin"):
         assert (core / name).read_text() == name
     assets = fixture.root / "build/pocket/doom/Assets/doom/common"
     assert (assets / "os.bin").read_text() == "os.bin"
@@ -219,14 +219,14 @@ def image_variants(fixture):
 
 def image_missing_secondary(fixture):
     dist = image_fixture(fixture)
-    (fixture.root / "runtime/pocket/os30.rbf_r").unlink()
+    (fixture.root / "runtime/pocket/os20.rbf_r").unlink()
     result = run_image(fixture, dist)
-    assert result.returncode != 0 and "runtime/os30.rbf_r missing" in result.stdout
+    assert result.returncode != 0 and "runtime/os20.rbf_r missing" in result.stdout
 
 
 def image_mismatched_secondary(fixture):
     dist = image_fixture(fixture)
-    write(fixture.root / "runtime/pocket/os30.rbf_r", "wrong runtime")
+    write(fixture.root / "runtime/pocket/os20.rbf_r", "wrong runtime")
     result = run_image(fixture, dist)
     assert result.returncode != 0 and "does not match runtime/MANIFEST" in result.stdout
 

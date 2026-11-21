@@ -30,6 +30,47 @@ extern "C" {
 #include <stdint.h>
 #include <string.h>
 
+/* Optional cooperative service during GPU command/fence waits. Define before
+ * including this header. The hook must return promptly and must not call GPU
+ * APIs, change command buffers, or re-enter these waits. It runs only on the
+ * calling thread; applications can use it to service audio deadlines.
+ * Keep the default empty so existing applications pay no additional cost. */
+#ifndef OF_GPU_WAIT_HOOK
+#define OF_GPU_WAIT_HOOK() ((void)0)
+#endif
+
+/* Optional episode timing, defined before inclusion by diagnostic builds.
+ * BEGIN receives true only on the first failed poll; END receives whether
+ * any poll failed. Hooks must evaluate those predicates before reading a
+ * timer, must not re-enter GPU APIs, and run on the calling thread only.
+ * Ring timing excludes preceding submission/DMA waits. These hooks do not
+ * cover MMIO store latency, texture/LUT uploads, nonblocking reserve probes,
+ * or application/kernel presentation waits. Defaults generate no code. */
+#define OF_GPU_WAIT_PROFILE_RING   0u
+#define OF_GPU_WAIT_PROFILE_DMA    1u
+#define OF_GPU_WAIT_PROFILE_FENCE  2u
+#ifndef OF_GPU_WAIT_PROFILE_BEGIN
+#define OF_GPU_WAIT_PROFILE_BEGIN(kind, first) ((void)0)
+#endif
+#ifndef OF_GPU_WAIT_PROFILE_END
+#define OF_GPU_WAIT_PROFILE_END(kind, waited) ((void)0)
+#endif
+#ifndef OF_GPU_WAIT_PROFILE_RESET
+#define OF_GPU_WAIT_PROFILE_RESET() ((void)0)
+#endif
+
+/* Optional per-batch transport timing. CPU-ring timing includes the staged
+ * loads, MMIO stores, status check and publish. DMA timing covers source
+ * visibility preparation only; descriptor/idle waits are separate wait hooks.
+ * Neither hook runs per word; defaults generate no code. */
+#ifndef OF_GPU_SUBMIT_PROFILE_BEGIN
+#define OF_GPU_SUBMIT_PROFILE_BEGIN(cpu_ring) ((void)0)
+#endif
+#ifndef OF_GPU_SUBMIT_PROFILE_END
+#define OF_GPU_SUBMIT_PROFILE_END(cpu_ring, words) ((void)0)
+#endif
+
+
 #ifndef OF_PC
 #include "of_caps.h"
 #include "of_cache.h"
@@ -524,9 +565,12 @@ static inline void _gpu_wait_dma_idle_debug(void) {
      * here forever with no diagnostic. */
     uint32_t dma_spins = 0;
     while (GPU_STATUS & GPU_STATUS_DMA_BUSY) {
+        OF_GPU_WAIT_PROFILE_BEGIN(OF_GPU_WAIT_PROFILE_DMA, dma_spins == 0u);
+        OF_GPU_WAIT_HOOK();
         if (++dma_spins == 50000000u)
             __builtin_trap();  /* → fatal_trap dumps GPU state */
     }
+    OF_GPU_WAIT_PROFILE_END(OF_GPU_WAIT_PROFILE_DMA, dma_spins != 0u);
     _gpu_batch_inflight_mask = 0;
     if (dma_spins) {
         _gpu_dbg_dma_waits++;
@@ -543,9 +587,12 @@ static inline void _gpu_wait_dma_desc_slot_debug(void) {
 
     uint32_t dma_spins = 0;
     while (GPU_STATUS & GPU_STATUS_DMA_DESC_FULL) {
+        OF_GPU_WAIT_PROFILE_BEGIN(OF_GPU_WAIT_PROFILE_DMA, dma_spins == 0u);
+        OF_GPU_WAIT_HOOK();
         if (++dma_spins == 50000000u)
             __builtin_trap();  /* wedged DMA queue — see of_gpu_wait */
     }
+    OF_GPU_WAIT_PROFILE_END(OF_GPU_WAIT_PROFILE_DMA, dma_spins != 0u);
     if (dma_spins) {
         _gpu_dbg_dma_waits++;
         _gpu_dbg_dma_spin_iters += dma_spins;
@@ -554,6 +601,7 @@ static inline void _gpu_wait_dma_desc_slot_debug(void) {
 
 static inline void _gpu_wait_transluc_idle(void) {
     while (GPU_STATUS & GPU_STATUS_TRANSLUC_BUSY) {
+        OF_GPU_WAIT_HOOK();
     }
 }
 
@@ -616,6 +664,7 @@ static inline void _gpu_flush_cmd_stream(void) {
     uint32_t submit_index = _gpu_batch_index;
 
     if (_gpu_cpu_ring) {
+        OF_GPU_SUBMIT_PROFILE_BEGIN(1);
         /* Space for the complete batch was reserved before staging it. The
          * published pointer moves only after every word reaches ring BRAM. */
         /* Load four words before their MMIO stores to avoid load/use bubbles.
@@ -676,6 +725,7 @@ static inline void _gpu_flush_cmd_stream(void) {
             != GPU_STATUS_CPU_RING_MODE)
             __builtin_trap();
         GPU_CTRL = GPU_CTRL_CPU_RING_PUBLISH;
+        OF_GPU_SUBMIT_PROFILE_END(1, submit_words);
         _gpu_cmd_words = 0;
         _gpu_unflushed_sync = 0;
         _gpu_batch_inflight_mask = 0;
@@ -702,6 +752,7 @@ static inline void _gpu_flush_cmd_stream(void) {
      * and far faster than re-writing every command word through the
      * single-outstanding uncached alias (thousands of serialized stores
      * per heavy frame = visible frame-rate loss on the handheld). */
+    OF_GPU_SUBMIT_PROFILE_BEGIN(0);
     if (_gpu_publish_uncached < 0)
         _gpu_publish_uncached =
             (of_get_caps()->platform_id == OF_PLATFORM_MISTER);
@@ -715,6 +766,7 @@ static inline void _gpu_flush_cmd_stream(void) {
         _gpu_flush_cmd_cache_range(_gpu_batch_buf, submit_words * 4u);
         _gpu_drain_cmd_writeback(submit_words * 4u);
     }
+    OF_GPU_SUBMIT_PROFILE_END(0, submit_words);
     _gpu_wait_dma_desc_slot_debug();
 
     /* The publish above is the data-visibility barrier.  The GPU MMIO
@@ -760,9 +812,12 @@ static inline void _gpu_ring_ensure(uint32_t bytes) {
             _gpu_note_ring_free(ring_free);
             if (ring_free >= bytes)
                 break;
+            OF_GPU_WAIT_PROFILE_BEGIN(OF_GPU_WAIT_PROFILE_RING, ring_spins == 0u);
+            OF_GPU_WAIT_HOOK();
             if (++ring_spins == 50000000u)
                 __builtin_trap();  /* → fatal_trap dumps GPU state */
         } while (1);
+        OF_GPU_WAIT_PROFILE_END(OF_GPU_WAIT_PROFILE_RING, ring_spins != 0u);
         _gpu_dbg_ring_waits++;
         _gpu_dbg_ring_spin_iters += ring_spins;
     }
@@ -818,6 +873,7 @@ static inline int of_gpu_try_reserve_bytes(uint32_t bytes,
     while (ring_free < bytes) {
         if (spin_limit-- == 0u)
             return 0;
+        OF_GPU_WAIT_HOOK();
         ring_free = _gpu_ring_free_now();
         _gpu_note_ring_free(ring_free);
     }
@@ -899,6 +955,7 @@ static inline void of_gpu_init(void) {
     _gpu_dbg_ring_waits = 0;
     _gpu_dbg_ring_spin_iters = 0;
     _gpu_dbg_min_ring_free = OF_GPU_RING_SIZE;
+    OF_GPU_WAIT_PROFILE_RESET();
     _gpu_state_valid = 0;
     _gpu_span_hdr_valid = 0;
     GPU_CTRL = 6;               /* soft_reset | ring_reset */
@@ -1124,10 +1181,13 @@ static inline void of_gpu_wait(uint32_t token) {
      * a genuine hang surfaces quickly. */
     uint32_t spins = 50000000u;
     while (!of_gpu_fence_reached(token)) {
+        OF_GPU_WAIT_PROFILE_BEGIN(OF_GPU_WAIT_PROFILE_FENCE, spins == 50000000u);
+        OF_GPU_WAIT_HOOK();
         if (--spins == 0) {
             __builtin_trap();  /* → illegal-instruction trap, mcause=2 */
         }
     }
+    OF_GPU_WAIT_PROFILE_END(OF_GPU_WAIT_PROFILE_FENCE, spins != 50000000u);
 }
 
 static inline void of_gpu_finish(void) {
