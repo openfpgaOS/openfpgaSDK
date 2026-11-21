@@ -40,11 +40,14 @@ BUILD     = $(SDK_ROOT)/build/pocket/sdk
 # Discover SDK apps: every src/apps/<name>/ that has its own Makefile.
 APPS = $(sort $(patsubst %/,%,$(dir $(wildcard */Makefile))))
 
-# Apps that still build but are left out of the Pocket demo bundle: they need
-# hardware no bundled Pocket bitstream has.  triangles uses the hardware
-# vertex-triangle path (OF_HW_GPU_VERT_TRI), which os20 and os25 do not carry;
-# build it per app for MiSTer (make build APP=triangles TARGET=mister).
-POCKET_SKIP = triangles
+# The os30 3D demo core (dist/sdk/Cores/ThinkElastic.openfpgaOS3D, platform
+# openfpgaos3d, the triangles demo) stays in the tree, but SDK 0.9.7 ships no
+# os30 image: the last one predates the API 0.9.1 kernel.  While
+# runtime/pocket/os30.rbf_r is absent the release step leaves that core, its
+# platform and triangles.elf out of the bundle; they return by themselves once
+# an os30 image built for the current kernel is published into runtime/pocket/.
+HAVE_OS30 = $(wildcard $(RUNTIME_POCKET)/os30.rbf_r)
+POCKET_SKIP = $(if $(HAVE_OS30),,triangles)
 
 all: build-apps release
 
@@ -65,6 +68,11 @@ release:
 	@# (framework-level chip32_vm disables the APF datatable auto-population — see
 	@# git history).  Give every core dir exactly the bitstream(s) its own
 	@# core.json names, plus the shared loader VM.
+	@if [ -z "$(HAVE_OS30)" ]; then \
+		rm -rf "$(BUILD)/Cores/ThinkElastic.openfpgaOS3D" "$(BUILD)/Assets/openfpgaos3d" \
+		       "$(BUILD)/Platforms/openfpgaos3d.json"; \
+		echo "  os30.rbf_r not in runtime/pocket/ - leaving the openfpgaOS3D core out"; \
+	fi
 	@for core in $(BUILD)/Cores/*/; do \
 		for rbf in $$(grep -o '"[^"]*\.rbf_r"' "$$core/core.json" | tr -d '"' | sort -u); do \
 			cp $(RUNTIME_POCKET)/$$rbf "$$core/" || exit 1; \
@@ -85,6 +93,16 @@ release:
 			[ -f "$$f" ] && cp "$$f" "$(BUILD)/Assets/$(PLATFORM)/common/"; \
 		done; \
 	done 2>/dev/null; true
+	@# --- os30 3D core lives on its OWN platform (openfpgaos3d) so the Pocket
+	@# reconfigures the FPGA to os30 instead of reusing the demo core's
+	@# already-loaded os25.  Give that platform the shared runtime + triangles.
+	@if [ -d "$(BUILD)/Assets/openfpgaos3d" ]; then \
+		mkdir -p $(BUILD)/Assets/openfpgaos3d/common; \
+		cp $(RUNTIME_POCKET)/os.bin $(BUILD)/Assets/openfpgaos3d/common/; \
+		cp $(RUNTIME)/bank.ofsf $(BUILD)/Assets/openfpgaos3d/common/ 2>/dev/null || true; \
+		[ -f "$(SDK_ROOT)/.obj/sdk/triangles/app.elf" ] && \
+			cp "$(SDK_ROOT)/.obj/sdk/triangles/app.elf" "$(BUILD)/Assets/openfpgaos3d/common/triangles.elf" || true; \
+	fi
 	@echo "Ready: build/pocket/sdk/"
 
 new:

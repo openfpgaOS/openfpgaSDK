@@ -858,7 +858,8 @@ Install a core and the application ELFs built with the same SDK together.
 
 A core pins one variant: its `core.json` names one bitstream in `cores[]`.
 The bundled demo core uses `os25.rbf_r`. For a custom core, choose at scaffold
-time (`scripts/customize.sh --variant os20|os25`) or override per build with
+time (`scripts/customize.sh --variant os20|os25`; `os30` is accepted for
+when its image returns, and fails at build time while it is absent) or override per build with
 `VARIANT=os20 make build CORE=<name>`.
 
 `make debug` JTAG-loads the fixed `ap_core.sof` (os25) and pushes your ELF onto
@@ -892,9 +893,13 @@ else
     draw_on_cpu();                                  /* always-available fallback   */
 ```
 
-The `triangles` demo uses the hardware vertex-triangle path, which neither
-Pocket image carries. It still builds, but it is not part of the Pocket demo
-bundle; build it per app for MiSTer (`make build APP=triangles TARGET=mister`).
+The `triangles` demo uses the hardware vertex-triangle path, which needs an
+os30 image. Its source, the `openfpgaOS3D` demo core and its `openfpgaos3d`
+platform stay in the tree, but 0.9.7 ships no os30 image, so `make package
+CORE=sdk` leaves them out of the bundle. They are packaged again as soon as an
+os30 image built for the current kernel is in `runtime/pocket/os30.rbf_r`.
+Until then, build `triangles` per app for MiSTer
+(`make build APP=triangles TARGET=mister`).
 
 To rebuild a variant from source in the
 [openfpgaOS](https://github.com/openfpgaOS/openfpgaOS) repo:

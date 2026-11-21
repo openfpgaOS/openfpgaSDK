@@ -32,10 +32,12 @@ That core is not updated by this release.
 - Removed from `runtime/pocket/`: `os30.rbf_r`, `os30-macxf.rbf_r`,
   `os30-vtx.rbf_r` and `os25zf.rbf_r`. They predate the louder mixer and
   must not be paired with this kernel. `scripts/customize.sh --variant`
-  accepts `os20` and `os25`.
+  keeps the `os30` option for when
+  that image is rebuilt.
 - The `triangles` demo is no longer in the Pocket bundle: it needs hardware
-  vertex triangles, which neither bundled image has. Its source stays and it
-  builds for MiSTer. The bundle contains 22 demo ELFs.
+  vertex triangles, which neither bundled image has. Its source, the
+  openfpgaOS3D demo core and its platform stay in the source tree and are
+  packaged again once an os30 image for this kernel exists. The bundle contains 22 demo ELFs.
 
 Games that need os30 (Quake2) are unaffected: their releases bundle their own
 core and kernel. The MiSTer runtime in the source tree is unchanged.
